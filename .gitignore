@@ -1,0 +1,18 @@
+node_modules/
+release/
+dist/
+
+# build/icon.png is generated from assets/logo.svg by `npm run icons`, but is
+# committed on purpose: rasterising it needs a desktop session, which release
+# runners should not have to depend on.
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and editor state
+*.log
+npm-debug.log*
+.vscode/
+.idea/

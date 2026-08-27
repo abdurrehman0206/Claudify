@@ -1,0 +1,77 @@
+{
+  "name": "claudify",
+  "version": "1.0.0",
+  "description": "Run multiple Claude Desktop accounts side by side, on macOS and Windows.",
+  "main": "src/main/main.js",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "electron .",
+    "icons": "electron tools/make-icons.js",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "dev.claudify.app",
+    "productName": "Claudify",
+    "copyright": "Copyright © 2026 Claudify contributors",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "darkModeSupport": true,
+      "icon": "build/icon.png",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "identity": null,
+      "extendInfo": {
+        "LSUIElement": false,
+        "NSHighResolutionCapable": true
+      }
+    },
+    "dmg": {
+      "title": "${productName}",
+      "contents": [
+        { "x": 140, "y": 200, "type": "file" },
+        { "x": 400, "y": 200, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}"
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-${os}-${arch}-setup.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Claudify"
+    }
+  }
+}

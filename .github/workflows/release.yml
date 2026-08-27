@@ -1,0 +1,79 @@
+name: Release
+
+# Builds installers on both platforms and attaches them to a GitHub Release.
+# Tag a version to publish one:
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# Or run it by hand from the Actions tab to get artifacts without a release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            command: npm run dist:mac
+          - os: windows-latest
+            label: Windows
+            command: npm run dist:win
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installers
+        run: ${{ matrix.command }}
+        env:
+          # Unsigned builds. Set CSC_LINK / CSC_KEY_PASSWORD (macOS) or
+          # WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD (Windows) as repository secrets
+          # to sign, which removes the Gatekeeper and SmartScreen warnings.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: claudify-${{ matrix.label }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Attach installers to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: false
