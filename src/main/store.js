@@ -73,11 +73,36 @@ class Store {
     writeJSON(paths.settingsFile(), this.settings);
   }
 
+  /** Profiles Claudify created and owns. */
   list() {
     return this.profiles;
   }
 
+  /**
+   * The Claude you already had installed, presented as a profile so you do not
+   * have to sign in again just to use Claudify. It is synthesised rather than
+   * stored: keeping it out of profiles.json means no code path can delete it,
+   * and its data directory is your real Claude session.
+   */
+  mainProfile() {
+    const saved = this.settings.mainProfile || {};
+    return {
+      id: paths.MAIN_ID,
+      kind: 'main',
+      name: saved.name || 'Main',
+      color: COLORS.includes(saved.color) ? saved.color : 'slate',
+      createdAt: null,
+      lastLaunchedAt: saved.lastLaunchedAt || null,
+    };
+  }
+
+  /** Everything the UI should show, existing install first. */
+  allProfiles() {
+    return [this.mainProfile(), ...this.profiles];
+  }
+
   get(id) {
+    if (paths.isMain(id)) return this.mainProfile();
     return this.profiles.find((p) => p.id === id) || null;
   }
 
@@ -97,6 +122,17 @@ class Store {
   }
 
   update(id, { name, color }) {
+    // The main profile is renameable and recolourable like any other, but its
+    // label lives in settings because the profile itself is synthesised.
+    if (paths.isMain(id)) {
+      const saved = { ...(this.settings.mainProfile || {}) };
+      if (typeof name === 'string' && name.trim()) saved.name = name.trim();
+      if (COLORS.includes(color)) saved.color = color;
+      this.settings.mainProfile = saved;
+      this.saveSettings();
+      return this.mainProfile();
+    }
+
     const profile = this.get(id);
     if (!profile) return null;
     if (typeof name === 'string' && name.trim()) profile.name = name.trim();
@@ -106,6 +142,14 @@ class Store {
   }
 
   markLaunched(id) {
+    if (paths.isMain(id)) {
+      this.settings.mainProfile = {
+        ...(this.settings.mainProfile || {}),
+        lastLaunchedAt: new Date().toISOString(),
+      };
+      this.saveSettings();
+      return;
+    }
     const profile = this.get(id);
     if (!profile) return;
     profile.lastLaunchedAt = new Date().toISOString();
@@ -115,6 +159,16 @@ class Store {
   // The data directory goes to the Trash / Recycle Bin rather than being
   // deleted outright, so removing a profile is always recoverable.
   async remove(id) {
+    // Deleting the main profile would mean trashing the Claude install you
+    // already had. There is no path to that, by design.
+    if (paths.isMain(id)) {
+      return {
+        ok: false,
+        error:
+          'That is your existing Claude install, not a profile Claudify created, so it cannot be removed here.',
+      };
+    }
+
     const profile = this.get(id);
     if (!profile) return { ok: false, error: 'That profile no longer exists.' };
 

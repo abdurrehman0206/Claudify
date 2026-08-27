@@ -127,13 +127,22 @@ to `.icns` and `.ico`.
 
 ### First run
 
+The Claude you already have is listed first, as **Main**, tagged *your existing
+Claude*. You do not sign in again for it — it is the same install and the same
+account you were already using, and if it is already open Claudify shows it as
+running. Rename and recolour it like any other profile.
+
+Then, for each additional account:
+
 1. Click **New Profile**, give it a name and a colour.
 2. Click **Open**. Claude launches signed out.
 3. Sign in with the account you want that profile to hold.
 
-Repeat for each account. Your existing Claude install keeps its own session in
-the default location and is untouched — so if you already have one account
-signed in there, just leave it and use Claudify for the additional ones.
+Main is deliberately not deletable, and cannot be the target of an MCP config
+copy. Its data directory is your real Claude session rather than something
+Claudify created, so no action here writes over it. It is synthesised at
+runtime and never stored in `profiles.json`, which is what makes that
+guarantee structural rather than a check someone can forget.
 
 ---
 

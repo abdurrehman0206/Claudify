@@ -87,11 +87,19 @@ class Launcher {
       return { ok: true, alreadyRunning: true };
     }
 
-    try {
-      const dataDir = guard.validateDataDirectory(paths.dataDirectory(id));
-      fs.mkdirSync(dataDir, { recursive: true });
+    const isMain = paths.isMain(id);
 
-      const args = [`${USER_DATA_FLAG}${dataDir}`];
+    try {
+      // The main profile is the Claude you already had, so it launches with no
+      // --user-data-dir at all: that is what makes it the same instance and the
+      // same signed-in account you were already using, rather than a new one.
+      let dataDir = null;
+      const args = [];
+      if (!isMain) {
+        dataDir = guard.validateDataDirectory(paths.dataDirectory(id));
+        fs.mkdirSync(dataDir, { recursive: true });
+        args.push(`${USER_DATA_FLAG}${dataDir}`);
+      }
       guard.validateArguments(args);
 
       // Spawning the executable directly is what makes this work on both
@@ -118,7 +126,9 @@ class Launcher {
       this.running.set(id, { pid: child.pid, startedAt: Date.now() });
       this.unverified.delete(id);
       this.store.markLaunched(id);
-      this.scheduleVerification(id, dataDir);
+      // Only Claudify-managed profiles need the isolation check; the main
+      // profile is the default directory and is always already populated.
+      if (!isMain) this.scheduleVerification(id, dataDir);
 
       return { ok: true, pid: child.pid };
     } catch (error) {
@@ -184,13 +194,13 @@ class Launcher {
     }
 
     try {
-      const dataDirectory = guard.validateDataDirectory(paths.dataDirectory(id));
-      fs.mkdirSync(dataDirectory, { recursive: true });
-
-      const args = [
-        `${USER_DATA_FLAG}${dataDirectory}`,
-        codeSessions.resumeURL(sessionId),
-      ];
+      const args = [];
+      if (!paths.isMain(id)) {
+        const dataDirectory = guard.validateDataDirectory(paths.dataDirectory(id));
+        fs.mkdirSync(dataDirectory, { recursive: true });
+        args.push(`${USER_DATA_FLAG}${dataDirectory}`);
+      }
+      args.push(codeSessions.resumeURL(sessionId));
       guard.validateArguments(args);
 
       const child = spawn(this.installation.executable, args, {
@@ -267,11 +277,13 @@ class Launcher {
     for (const profile of this.store.list()) {
       byPath.set(path.resolve(paths.dataDirectory(profile.id)), profile.id);
     }
-    if (byPath.size === 0) return;
 
     const found = await this.listClaudeMainProcesses();
     for (const { pid, dataDir } of found) {
-      const id = byPath.get(path.resolve(dataDir));
+      // No --user-data-dir means the instance is using the default directory,
+      // which is the Claude you already had open. Recognising it is what stops
+      // Claudify asking you to sign in again for an account already running.
+      const id = dataDir === null ? paths.MAIN_ID : byPath.get(path.resolve(dataDir));
       if (id && !this.running.has(id)) {
         this.running.set(id, { pid, startedAt: Date.now() });
       }
@@ -284,15 +296,21 @@ class Launcher {
     const results = [];
 
     if (process.platform === 'darwin') {
+      const executable = this.installation ? this.installation.executable : null;
       const output = await execFileAsync('/bin/ps', ['-axww', '-o', 'pid=,command=']);
       for (const line of output.split('\n')) {
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.includes(USER_DATA_FLAG)) continue;
-        if (trimmed.includes('--type=')) continue;
+        if (!trimmed) continue;
         const match = trimmed.match(/^(\d+)\s+(.*)$/);
         if (!match) continue;
-        const dataDir = extractDataDir(match[2]);
-        if (dataDir) results.push({ pid: Number(match[1]), dataDir });
+        const command = match[2];
+        // Without the flag to key on, identify Claude by its executable path.
+        if (executable && !command.startsWith(executable)) continue;
+        if (command.includes('--type=')) continue;
+        results.push({
+          pid: Number(match[1]),
+          dataDir: command.includes(USER_DATA_FLAG) ? extractDataDir(command) : null,
+        });
       }
       return results;
     }
@@ -314,10 +332,12 @@ class Launcher {
       const rows = Array.isArray(parsed) ? parsed : [parsed];
       for (const row of rows) {
         const cmd = row && row.CommandLine;
-        if (!cmd || !cmd.includes(USER_DATA_FLAG)) continue;
+        if (!cmd) continue;
         if (cmd.includes('--type=')) continue;
-        const dataDir = extractDataDir(cmd);
-        if (dataDir) results.push({ pid: Number(row.ProcessId), dataDir });
+        results.push({
+          pid: Number(row.ProcessId),
+          dataDir: cmd.includes(USER_DATA_FLAG) ? extractDataDir(cmd) : null,
+        });
       }
     }
 

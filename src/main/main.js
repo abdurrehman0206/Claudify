@@ -79,7 +79,7 @@ function createWindow() {
 // -------------------------------------------------------------------- tray
 
 function buildTrayMenu() {
-  const profiles = store.list();
+  const profiles = store.allProfiles();
   const items = [];
 
   if (profiles.length === 0) {
@@ -126,7 +126,7 @@ function currentState() {
   return {
     platform: process.platform,
     colors: COLORS,
-    profiles: store.list(),
+    profiles: store.allProfiles(),
     running: status.running,
     unverified: status.unverified,
     installation: status.installation,

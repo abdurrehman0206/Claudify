@@ -167,6 +167,12 @@ function buildCard(profile) {
     dot.className = 'dot';
     nameRow.appendChild(dot);
   }
+  if (profile.kind === 'main') {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = 'your existing Claude';
+    nameRow.appendChild(tag);
+  }
   body.appendChild(nameRow);
 
   const meta = document.createElement('div');
@@ -260,10 +266,16 @@ function buildMenu(profile) {
 
   item('Rename…', () => openEditor(profile));
   item('Show data folder', () => api.reveal(profile.id));
-  item('Copy MCP config from…', () => openMcpDialog(profile));
   item('Edit MCP config', () => api.openMcpConfig(profile.id));
-  menu.appendChild(document.createElement('hr'));
-  item('Delete profile…', () => confirmDelete(profile), true);
+
+  // The main profile is the Claude install you already had. Copying a config
+  // over its own, or deleting it, would act on your real session rather than
+  // on anything Claudify created, so neither is offered.
+  if (profile.kind !== 'main') {
+    item('Copy MCP config from…', () => openMcpDialog(profile));
+    menu.appendChild(document.createElement('hr'));
+    item('Delete profile…', () => confirmDelete(profile), true);
+  }
 
   wrap.appendChild(menu);
   return wrap;
