@@ -11,10 +11,15 @@ const paths = require('./paths');
 // fact is what makes this work: the store is *already* shared by every Claudify
 // profile, so nothing has to be copied between them.
 //
-// This module is strictly read-only. Handing a session to a profile is done by
-// launching that profile with Claude's own `claude://resume?session=<id>` deep
-// link, so Claude performs the import itself through a supported path. Claudify
-// never writes into Claude's session storage.
+// Handing a session to a profile is done by launching that profile with
+// Claude's own `claude://resume?session=<id>` deep link, so Claude performs the
+// import itself through a supported path.
+//
+// This module is read-only with exactly one exception: `unarchive` clears the
+// isArchived flag on a session record, because Claude can set that flag but
+// offers no way to clear it. That write is kept as narrow as the problem
+// allows -- one boolean, one file, the original kept beside it, and refused
+// while the owning profile is running.
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEAD_BYTES = 64 * 1024;
@@ -355,6 +360,127 @@ function listSessions(profiles) {
   return { available: true, root, retentionDays: keepDays, sessions };
 }
 
+/** Walks every profile's session records, newest first. */
+function eachRecordFile(profiles, visit) {
+  const roots = [[paths.MAIN_ID, 'Main', mainInstallDirectory()]];
+  for (const profile of profiles || []) {
+    roots.push([profile.id, profile.name, paths.dataDirectory(profile.id)]);
+  }
+
+  for (const [id, label, baseDir] of roots) {
+    const root = path.join(baseDir, 'claude-code-sessions');
+    let accounts;
+    try {
+      accounts = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const account of accounts) {
+      if (!account.isDirectory()) continue;
+      let workspaces;
+      try {
+        workspaces = fs.readdirSync(path.join(root, account.name), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const workspace of workspaces) {
+        if (!workspace.isDirectory()) continue;
+        const dir = path.join(root, account.name, workspace.name);
+        let files;
+        try {
+          files = fs.readdirSync(dir);
+        } catch {
+          continue;
+        }
+        for (const file of files) {
+          if (file.endsWith('.json')) visit(path.join(dir, file), id, label);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Archived sessions, which Claude offers no way to bring back from its own UI.
+ * These are listed from the session records rather than from transcripts,
+ * because archiving is recorded there and an archived session may well have
+ * outlived its transcript.
+ */
+function listArchived(profiles) {
+  const transcripts = new Set();
+  const { sessions } = listSessions(profiles);
+  for (const session of sessions) transcripts.add(session.id);
+
+  const found = [];
+  eachRecordFile(profiles, (file, profileId, profileName) => {
+    let record;
+    try {
+      record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      return;
+    }
+    if (record.isArchived !== true) return;
+    found.push({
+      file,
+      profileId,
+      profileName,
+      sessionId: record.cliSessionId || record.sessionId || null,
+      title: (record.title || '').trim() || null,
+      cwd: record.cwd || null,
+      lastActivityAt: record.lastActivityAt || record.createdAt || null,
+      // Archiving does not stop the transcript being pruned on its own
+      // schedule, so an old archived session can come back as an entry with no
+      // conversation left behind it. Saying so beats a silent empty session.
+      hasTranscript: record.cliSessionId
+        ? transcripts.has(record.cliSessionId)
+        : false,
+    });
+  });
+
+  found.sort((a, b) => String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)));
+  return found;
+}
+
+/**
+ * Brings an archived session back by clearing the flag on Claude's own record.
+ *
+ * This is the one place Claudify writes into Claude's storage, so it is kept
+ * as narrow as possible: one boolean, on one file, with the original kept
+ * beside it. It also refuses while that profile is running, because Claude
+ * holds its session list in memory and would write it straight back out.
+ */
+function unarchive(file, { profileRunning }) {
+  if (profileRunning) {
+    return {
+      ok: false,
+      error: 'Quit that profile first. Claude keeps its session list in memory while running and would undo the change.',
+    };
+  }
+
+  let record;
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+    record = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, error: `Could not read that session record: ${error.message}` };
+  }
+
+  if (record.isArchived !== true) {
+    return { ok: false, error: 'That session is not archived.' };
+  }
+
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(`${file}.bak-${stamp}`, raw, 'utf8');
+    record.isArchived = false;
+    fs.writeFileSync(file, JSON.stringify(record, null, 2), 'utf8');
+    return { ok: true, title: record.title || null };
+  } catch (error) {
+    return { ok: false, error: `Could not update that session record: ${error.message}` };
+  }
+}
+
 /** The deep link Claude itself handles: it imports the session and opens it. */
 function resumeURL(sessionId) {
   if (!isSessionId(sessionId)) {
@@ -365,6 +491,8 @@ function resumeURL(sessionId) {
 
 module.exports = {
   projectsRoot,
+  listArchived,
+  unarchive,
   retentionDays,
   mainInstallDirectory,
   isSessionId,

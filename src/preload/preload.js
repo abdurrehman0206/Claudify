@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('claudify', {
 
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   openSession: (payload) => ipcRenderer.invoke('sessions:open', payload),
+  listArchived: () => ipcRenderer.invoke('sessions:archived'),
+  unarchiveSession: (payload) => ipcRenderer.invoke('sessions:unarchive', payload),
   usage: (id) => ipcRenderer.invoke('profile:usage', id),
 
   chooseClaude: () => ipcRenderer.invoke('settings:chooseClaude'),

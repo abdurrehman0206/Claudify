@@ -190,6 +190,18 @@ function registerIPC() {
   // read-only; handing one to a profile goes through Claude's own deep link.
   handle('sessions:list', () => codeSessions.listSessions(store.list()));
 
+  handle('sessions:archived', () => codeSessions.listArchived(store.list()));
+
+  // The one write into Claude's own storage: clearing an archive flag it
+  // offers no way to clear itself. Refused while that profile runs.
+  handle('sessions:unarchive', (_event, { file, profileId }) => {
+    const result = codeSessions.unarchive(file, {
+      profileRunning: launcher.isRunning(profileId),
+    });
+    pushState();
+    return result;
+  });
+
   handle('sessions:open', (_event, { profileId, sessionId }) => {
     const result = launcher.openSession(profileId, sessionId);
     pushState();

@@ -343,6 +343,7 @@ let sessionSearch = '';
 let orphansOnly = false;
 const collapsedGroups = new Set();
 let sessionTimer = null;
+let archivedSessions = [];
 let retention = 30;
 
 function switchTab(name) {
@@ -378,9 +379,7 @@ async function loadSessions() {
 
   sessions = result.sessions || [];
   retention = result.retentionDays || 30;
-  $('sessions-status').textContent = sessions.length
-    ? `Claude keeps transcripts for ${retention} days`
-    : 'No sessions found yet. Use Claude Code once and they will appear here.';
+  archivedSessions = (await api.listArchived()) || [];
   renderSessions();
 }
 
@@ -552,6 +551,78 @@ function groupSessions() {
   return groups;
 }
 
+function buildArchivedRow(entry) {
+  const li = document.createElement('li');
+  li.className = 'card session';
+
+  const body = document.createElement('div');
+  body.className = 'card-body';
+
+  const title = document.createElement('div');
+  title.className = 'card-name';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = entry.title || entry.sessionId || 'Untitled session';
+  title.appendChild(name);
+
+  const where = document.createElement('span');
+  where.className = 'tag';
+  where.textContent = entry.profileName;
+  title.appendChild(where);
+  body.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'card-meta';
+  const bits = [];
+  if (entry.cwd) bits.push(shortenPath(entry.cwd));
+  if (entry.lastActivityAt) {
+    bits.push(relativeTime(new Date(
+      typeof entry.lastActivityAt === 'number'
+        ? (entry.lastActivityAt > 1e12 ? entry.lastActivityAt : entry.lastActivityAt * 1000)
+        : entry.lastActivityAt
+    ).toISOString()).replace('Last opened ', ''));
+  }
+  meta.textContent = bits.join(' · ');
+  body.appendChild(meta);
+
+  // Archiving does not protect a transcript from the pruning clock, so an old
+  // archived session can come back as an entry with no conversation left.
+  if (!entry.hasTranscript) {
+    const warn = document.createElement('div');
+    warn.className = 'card-warning';
+    warn.appendChild(svg(ICON.warning, 13));
+    const text = document.createElement('span');
+    text.textContent =
+      'Its transcript has already been pruned, so restoring brings back the entry but not the conversation.';
+    warn.appendChild(text);
+    body.appendChild(warn);
+  }
+
+  li.appendChild(body);
+
+  const actions = document.createElement('div');
+  actions.className = 'card-actions';
+  const restore = document.createElement('button');
+  restore.className = 'ghost-button';
+  restore.textContent = 'Restore';
+  restore.disabled = Boolean(state.running[entry.profileId]);
+  restore.title = restore.disabled
+    ? `Quit ${entry.profileName} first — Claude would write its session list back over the change.`
+    : 'Bring this session back into that profile';
+  restore.addEventListener('click', async () => {
+    const result = await api.unarchiveSession({
+      file: entry.file,
+      profileId: entry.profileId,
+    });
+    if (result && result.error) showError(result.error);
+    await loadSessions();
+  });
+  actions.appendChild(restore);
+  li.appendChild(actions);
+
+  return li;
+}
+
 function renderSessions() {
   const host = $('session-groups');
   host.textContent = '';
@@ -565,7 +636,9 @@ function renderSessions() {
     : 'No sessions found yet. Use Claude Code once and they will appear here.';
 
   const groups = groupSessions();
-  if (groups.length === 0) {
+  const archivedVisible = !orphansOnly && !sessionSearch && archivedSessions.length > 0;
+
+  if (groups.length === 0 && !archivedVisible) {
     const note = document.createElement('p');
     note.className = 'hint';
     note.textContent = sessions.length
@@ -610,6 +683,52 @@ function renderSessions() {
 
     host.appendChild(section);
   }
+
+  renderArchivedGroup(host);
+}
+
+/**
+ * Archived sessions come from Claude's own records rather than from
+ * transcripts, because archiving is recorded there and an archived session can
+ * well have outlived its transcript. Claude offers no way to bring one back.
+ */
+function renderArchivedGroup(host) {
+  if (orphansOnly || sessionSearch || archivedSessions.length === 0) return;
+
+  const collapsed = collapsedGroups.has('archived');
+  const section = document.createElement('section');
+  section.className = 'group';
+
+  const header = document.createElement('button');
+  header.className = 'group-header';
+  header.setAttribute('aria-expanded', String(!collapsed));
+  header.appendChild(svg(ICON.chevron, 13));
+
+  const label = document.createElement('span');
+  label.className = 'group-label';
+  label.textContent = 'Archived';
+  header.appendChild(label);
+
+  const count = document.createElement('span');
+  count.className = 'group-count';
+  count.textContent = String(archivedSessions.length);
+  header.appendChild(count);
+
+  header.addEventListener('click', () => {
+    if (collapsed) collapsedGroups.delete('archived');
+    else collapsedGroups.add('archived');
+    renderSessions();
+  });
+  section.appendChild(header);
+
+  if (!collapsed) {
+    const list = document.createElement('ul');
+    list.className = 'session-list';
+    for (const entry of archivedSessions) list.appendChild(buildArchivedRow(entry));
+    section.appendChild(list);
+  }
+
+  host.appendChild(section);
 }
 
 function openSessionDialog(session) {
