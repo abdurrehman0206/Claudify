@@ -200,6 +200,75 @@ button:disabled:active {
   color: var(--text);
 }
 
+/* ----------------------------------------------------------------- tabs */
+
+.tabbar {
+  display: flex;
+  gap: 2px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 9px 12px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tab:active {
+  transform: none;
+}
+
+.view-intro {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  max-width: 62ch;
+}
+
+#sessions-status {
+  margin-bottom: 10px;
+}
+
+.session-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.card.session {
+  padding: 11px 13px;
+}
+
+.card.session .card-name {
+  font-weight: 500;
+  font-size: 13.5px;
+}
+
+.card.session .card-meta {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+  font-size: 11px;
+}
+
 /* -------------------------------------------------------------- banners */
 
 .banner {

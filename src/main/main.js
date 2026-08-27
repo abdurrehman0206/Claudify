@@ -16,6 +16,7 @@ const {
 const paths = require('./paths');
 const locator = require('./locator');
 const mcpConfig = require('./mcpConfig');
+const codeSessions = require('./codeSessions');
 const icon = require('./icon');
 const { Store, COLORS } = require('./store');
 const { Launcher } = require('./launcher');
@@ -180,6 +181,17 @@ function registerIPC() {
 
     pushState();
     return { ok: true, profile, mcp };
+  });
+
+  // Claude Code transcripts live in ~/.claude/projects, outside the user-data
+  // directory, so every profile already sees the same store. Listing is
+  // read-only; handing one to a profile goes through Claude's own deep link.
+  handle('sessions:list', () => codeSessions.listSessions());
+
+  handle('sessions:open', (_event, { profileId, sessionId }) => {
+    const result = launcher.openSession(profileId, sessionId);
+    pushState();
+    return result;
   });
 
   handle('mcp:sources', (_event, excludeProfileId) =>

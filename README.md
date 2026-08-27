@@ -157,6 +157,24 @@ account in two profiles and undo the isolation. The profile's previous file is
 kept beside it as a timestamped `.bak`, and a source that is not valid JSON is
 refused rather than half-written.
 
+**Code sessions are already shared — the Sessions tab just surfaces them.**
+Claude Code keeps its transcripts in `~/.claude/projects`, which sits in your
+home directory rather than inside any profile's user-data directory. Every
+profile therefore sees every session, whether it was started in the terminal or
+in the app's Code mode.
+
+The Sessions tab lists them with their working directory, branch and first
+prompt, and *Open in…* hands one to a chosen profile. That is done with Claude's
+own `claude://resume?session=<id>` deep link, passed to that specific profile's
+instance, so Claude performs the import itself. Claudify only ever reads the
+transcript store; it never writes into Claude's session storage, and the session
+stays available to every other profile afterwards.
+
+Two limits worth knowing. Sessions that are currently running somewhere are
+refused by Claude's own ownership check, so close one before moving it. And this
+covers Code sessions, not Cowork/agent-mode sessions, which live inside the
+profile and do not appear here.
+
 **Deep links pick a winner.** `claude://` links route to whichever instance
 grabs them first, which may not be the profile you expected.
 

@@ -303,6 +303,118 @@ function render() {
   renderSubtitle();
 }
 
+// ---------------------------------------------------------- code sessions
+
+let activeTab = 'profiles';
+let sessions = [];
+let sessionsLoaded = false;
+let openTarget = null;
+
+function switchTab(name) {
+  activeTab = name;
+  $('view-profiles').classList.toggle('hidden', name !== 'profiles');
+  $('view-sessions').classList.toggle('hidden', name !== 'sessions');
+  $('tab-profiles').setAttribute('aria-selected', String(name === 'profiles'));
+  $('tab-sessions').setAttribute('aria-selected', String(name === 'sessions'));
+  $('new-btn').classList.toggle('hidden', name !== 'profiles');
+  if (name === 'sessions' && !sessionsLoaded) loadSessions();
+}
+
+async function loadSessions() {
+  $('sessions-status').textContent = 'Looking for Claude Code sessions…';
+  const result = await api.listSessions();
+  sessionsLoaded = true;
+
+  if (!result || result.available === false) {
+    sessions = [];
+    $('sessions-status').textContent =
+      'No Claude Code transcript store found on this computer yet.';
+    renderSessions();
+    return;
+  }
+
+  sessions = result.sessions || [];
+  $('sessions-status').textContent = sessions.length
+    ? `${sessions.length} session${sessions.length === 1 ? '' : 's'} on this computer`
+    : 'No sessions found yet. Use Claude Code once and they will appear here.';
+  renderSessions();
+}
+
+function shortenPath(value) {
+  if (!value) return '';
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  return parts.length <= 3 ? value : `…${value.slice(value.indexOf(parts[parts.length - 3]) - 1)}`;
+}
+
+function buildSessionRow(session) {
+  const li = document.createElement('li');
+  li.className = 'card session';
+
+  const body = document.createElement('div');
+  body.className = 'card-body';
+
+  const title = document.createElement('div');
+  title.className = 'card-name';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = session.title || session.id;
+  title.appendChild(name);
+  body.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'card-meta';
+  const bits = [];
+  if (session.cwd) bits.push(shortenPath(session.cwd));
+  if (session.gitBranch) bits.push(session.gitBranch);
+  bits.push(relativeTime(session.lastActivityAt).replace('Last opened ', ''));
+  bits.push(formatBytes(session.bytes));
+  meta.textContent = bits.join(' · ');
+  body.appendChild(meta);
+
+  li.appendChild(body);
+
+  const actions = document.createElement('div');
+  actions.className = 'card-actions';
+  const open = document.createElement('button');
+  open.className = 'ghost-button';
+  open.textContent = 'Open in…';
+  open.disabled = state.profiles.length === 0 || !state.installation;
+  open.addEventListener('click', () => openSessionDialog(session));
+  actions.appendChild(open);
+  li.appendChild(actions);
+
+  return li;
+}
+
+function renderSessions() {
+  const list = $('session-list');
+  list.textContent = '';
+  for (const session of sessions) list.appendChild(buildSessionRow(session));
+}
+
+function openSessionDialog(session) {
+  openTarget = session;
+  $('open-summary').textContent = session.title || session.id;
+
+  const options = state.profiles.map((profile) => ({
+    value: profile.id,
+    label: profile.name,
+    meta: launcher_isRunning(profile.id) ? 'running' : 'not running',
+  }));
+  dropdownFor('open-profile').set(options, options.length ? options[0].value : null);
+
+  $('open-backdrop').classList.remove('hidden');
+}
+
+function launcher_isRunning(id) {
+  return Boolean(state.running && state.running[id]);
+}
+
+function closeOpenDialog() {
+  $('open-backdrop').classList.add('hidden');
+  openTarget = null;
+}
+
 // ---------------------------------------------------------------- editor
 
 function openEditor(profile) {
@@ -750,6 +862,21 @@ function wire() {
   });
   $('reveal-root').addEventListener('click', () => api.revealRoot());
 
+  $('tab-profiles').addEventListener('click', () => switchTab('profiles'));
+  $('tab-sessions').addEventListener('click', () => switchTab('sessions'));
+
+  $('open-cancel').addEventListener('click', closeOpenDialog);
+  $('open-confirm').addEventListener('click', async () => {
+    if (!openTarget) return;
+    const profileId = dropdownFor('open-profile').value;
+    if (!profileId) return closeOpenDialog();
+    const result = await api.openSession({ profileId, sessionId: openTarget.id });
+    closeOpenDialog();
+    if (result && result.error) showError(result.error);
+    else switchTab('profiles');
+    await refresh();
+  });
+
   $('mcp-cancel').addEventListener('click', closeMcpDialog);
   $('mcp-confirm').addEventListener('click', async () => {
     if (!mcpTarget) return;
@@ -784,6 +911,7 @@ function wire() {
     if (event.key !== 'Escape') return;
     if (!$('confirm-backdrop').classList.contains('hidden')) return closeConfirm();
     if (!$('mcp-backdrop').classList.contains('hidden')) return closeMcpDialog();
+    if (!$('open-backdrop').classList.contains('hidden')) return closeOpenDialog();
     if (!$('editor-backdrop').classList.contains('hidden')) return closeEditor();
     if (!$('settings-backdrop').classList.contains('hidden')) return closeSettings();
     if (openMenuId) {
@@ -792,7 +920,7 @@ function wire() {
     }
   });
 
-  for (const id of ['editor-backdrop', 'settings-backdrop', 'confirm-backdrop', 'mcp-backdrop']) {
+  for (const id of ['editor-backdrop', 'settings-backdrop', 'confirm-backdrop', 'mcp-backdrop', 'open-backdrop']) {
     $(id).addEventListener('click', (event) => {
       if (event.target.id === id) $(id).classList.add('hidden');
     });
@@ -804,7 +932,7 @@ function wire() {
     // Do not yank the list out from under an open menu or dialog.
     renderBanners();
     renderSubtitle();
-    if (!editing && !openMenuId) renderList();
+    if (!editing && !openMenuId && activeTab === 'profiles') renderList();
     if (!$('settings-backdrop').classList.contains('hidden')) renderSettings();
   });
 }

@@ -7,6 +7,7 @@ const { spawn, execFile } = require('child_process');
 const paths = require('./paths');
 const guard = require('./guard');
 const locator = require('./locator');
+const codeSessions = require('./codeSessions');
 
 const USER_DATA_FLAG = '--user-data-dir=';
 const VERIFY_DELAY_MS = 20000;
@@ -156,6 +157,55 @@ class Launcher {
         execFile('taskkill', ['/PID', String(entry.pid), '/T', '/F'], () => {});
       } else {
         process.kill(entry.pid, 'SIGTERM');
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  }
+
+  /**
+   * Hands a Claude Code session to a profile using Claude's own
+   * `claude://resume?session=<id>` deep link, so Claude does the import through
+   * a supported path and Claudify never touches its session storage.
+   *
+   * The same spawn covers both cases. If the profile is not running it cold
+   * starts and picks the link out of argv. If it is running, the spawn hits
+   * Electron's single-instance lock for that user-data directory, the running
+   * instance receives the argv through its `second-instance` handler, and the
+   * process we just started exits. Either way the session lands in the profile
+   * that was asked for, not whichever instance happens to own the protocol.
+   */
+  openSession(id, sessionId) {
+    const profile = this.store.get(id);
+    if (!profile) return { ok: false, error: 'That profile no longer exists.' };
+    if (!this.installation) {
+      return { ok: false, error: 'Claude Desktop was not found.' };
+    }
+
+    try {
+      const dataDirectory = guard.validateDataDirectory(paths.dataDirectory(id));
+      fs.mkdirSync(dataDirectory, { recursive: true });
+
+      const args = [
+        `${USER_DATA_FLAG}${dataDirectory}`,
+        codeSessions.resumeURL(sessionId),
+      ];
+      guard.validateArguments(args);
+
+      const child = spawn(this.installation.executable, args, {
+        detached: true,
+        stdio: 'ignore',
+        env: guard.cleanEnvironment(),
+      });
+      child.on('error', () => {});
+      child.unref();
+
+      // Only claim the pid when this spawn actually became the instance; when
+      // it merely forwarded argv to a running one it exits straight away.
+      if (!this.isRunning(id) && child.pid) {
+        this.running.set(id, { pid: child.pid, startedAt: Date.now() });
+        this.store.markLaunched(id);
       }
       return { ok: true };
     } catch (error) {

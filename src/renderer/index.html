@@ -29,9 +29,25 @@
       </div>
     </header>
 
+    <nav class="tabbar" role="tablist">
+      <button id="tab-profiles" class="tab" role="tab" aria-selected="true">Profiles</button>
+      <button id="tab-sessions" class="tab" role="tab" aria-selected="false">Sessions</button>
+    </nav>
+
     <div id="banners"></div>
 
     <main id="main">
+      <section id="view-sessions" class="hidden">
+        <p class="view-intro">
+          Claude Code keeps its transcripts outside any profile, so every
+          profile can see all of them. Opening one hands it to that profile
+          through Claude's own import.
+        </p>
+        <div id="sessions-status" class="hint"></div>
+        <ul id="session-list" class="session-list"></ul>
+      </section>
+
+      <section id="view-profiles">
       <section id="empty" class="empty hidden">
         <div class="empty-glyph">
           <svg viewBox="0 0 48 48" aria-hidden="true">
@@ -48,6 +64,7 @@
       </section>
 
       <ul id="profile-list" class="profile-list"></ul>
+      </section>
     </main>
 
     <!-- Profile editor -->
@@ -109,6 +126,27 @@
 
         <div class="modal-actions">
           <button id="settings-close" class="primary-button">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Open a Code session in a chosen profile -->
+    <div id="open-backdrop" class="backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="open-title">
+        <h2 id="open-title">Open session in…</h2>
+        <p class="hint" id="open-summary"></p>
+        <div class="field">
+          <span>Profile</span>
+          <div class="dropdown" id="open-profile"></div>
+        </div>
+        <p class="hint">
+          Claude imports the session into that profile, keeping its
+          conversation history. The transcript itself is only read — it stays
+          available to every other profile too.
+        </p>
+        <div class="modal-actions">
+          <button id="open-cancel" class="ghost-button">Cancel</button>
+          <button id="open-confirm" class="primary-button">Open</button>
         </div>
       </div>
     </div>
