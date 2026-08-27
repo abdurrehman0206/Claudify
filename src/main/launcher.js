@@ -347,19 +347,47 @@ class Launcher {
     return usage;
   }
 
+  /**
+   * The directory every Claude process lives under. Matching on this rather
+   * than on the main executable is what makes the memory figure honest: an
+   * Electron app spends almost all of its memory in helper processes, and on
+   * macOS those are separate binaries under Contents/Frameworks, not the
+   * executable itself. Filtering by the executable counted the main process
+   * alone and reported a few hundred MB for an app actually using many GB.
+   */
+  installScope() {
+    if (!this.installation) return null;
+
+    let root;
+    if (process.platform === 'darwin') {
+      // The .app bundle, which contains both Contents/MacOS and the helpers.
+      const bundle = this.installation.displayPath || '';
+      root = bundle.endsWith('.app')
+        ? bundle
+        : path.dirname(path.dirname(this.installation.executable));
+    } else {
+      // On Windows the helpers share the executable's folder, and bundled
+      // services such as cowork-svc sit just below it.
+      root = path.dirname(this.installation.executable);
+    }
+
+    // Trailing separator so a sibling like "Claude.app2" cannot match.
+    return root.endsWith(path.sep) ? root : root + path.sep;
+  }
+
   /** Every Claude process with its resident memory and owning directory. */
   async processStats() {
     const stats = [];
+    const scope = this.installScope();
+    if (!scope) return stats;
 
     if (process.platform === 'darwin') {
-      const executable = this.installation ? this.installation.executable : null;
-      if (!executable) return stats;
       const output = await execFileAsync('/bin/ps', ['-axo', 'pid=,rss=,command=']);
       for (const line of output.split('\n')) {
         const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
         if (!match) continue;
         const command = match[3];
-        if (!command.startsWith(executable)) continue;
+        if (!command.startsWith(scope)) continue;
         stats.push({
           pid: Number(match[1]),
           memoryBytes: Number(match[2]) * 1024, // ps reports RSS in KB
@@ -370,12 +398,18 @@ class Launcher {
     }
 
     if (process.platform === 'win32') {
-      const output = await execFileAsync('powershell', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        "Get-CimInstance Win32_Process -Filter \"Name='claude.exe'\" | Select-Object ProcessId,WorkingSetSize,CommandLine | ConvertTo-Json -Compress",
-      ]);
+      // The scope goes through the environment so a path with spaces or
+      // brackets cannot break the script or be read as a wildcard.
+      const output = await execFileAsync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:CLAUDIFY_SCOPE) } | Select-Object ProcessId,WorkingSetSize,CommandLine | ConvertTo-Json -Compress',
+        ],
+        { env: { ...process.env, CLAUDIFY_SCOPE: scope } }
+      );
       if (!output.trim()) return stats;
       let parsed;
       try {
@@ -384,13 +418,14 @@ class Launcher {
         return stats;
       }
       for (const row of Array.isArray(parsed) ? parsed : [parsed]) {
-        if (!row || !row.CommandLine) continue;
+        if (!row) continue;
         stats.push({
           pid: Number(row.ProcessId),
           memoryBytes: Number(row.WorkingSetSize) || 0,
-          dataDir: row.CommandLine.includes(USER_DATA_FLAG)
-            ? extractDataDir(row.CommandLine)
-            : null,
+          dataDir:
+            row.CommandLine && row.CommandLine.includes(USER_DATA_FLAG)
+              ? extractDataDir(row.CommandLine)
+              : null,
         });
       }
     }
