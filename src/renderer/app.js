@@ -631,9 +631,36 @@ function renderSessions() {
   $('group-project').setAttribute('aria-pressed', String(sessionGrouping === 'project'));
 
   const orphanCount = sessions.filter((s) => s.owners.length === 0).length;
-  $('sessions-status').textContent = sessions.length
-    ? `${sessions.length} on this computer · ${orphanCount} in no profile · kept ${retention} days`
-    : 'No sessions found yet. Use Claude Code once and they will appear here.';
+  const status = $('sessions-status');
+  status.textContent = '';
+
+  if (!sessions.length && !archivedSessions.length) {
+    status.textContent =
+      'No sessions found yet. Use Claude Code once and they will appear here.';
+  } else {
+    status.appendChild(
+      document.createTextNode(
+        `${sessions.length} on this computer · ${orphanCount} in no profile · kept ${retention} days`
+      )
+    );
+
+    // The archived group sits below every other group, so with a lot of
+    // sessions there was nothing above the fold to say it existed at all.
+    if (archivedSessions.length) {
+      status.appendChild(document.createTextNode(' · '));
+      const jump = document.createElement('button');
+      jump.className = 'link-button';
+      jump.textContent = `${archivedSessions.length} archived`;
+      jump.title = 'Jump to the archived sessions';
+      jump.addEventListener('click', () => {
+        collapsedGroups.delete('archived');
+        renderSessions();
+        const group = $('session-groups').lastElementChild;
+        if (group) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      status.appendChild(jump);
+    }
+  }
 
   const groups = groupSessions();
   const archivedVisible = !orphansOnly && !sessionSearch && archivedSessions.length > 0;
