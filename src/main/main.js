@@ -26,6 +26,7 @@ let launcher = null;
 let mainWindow = null;
 let tray = null;
 let statusTimer = null;
+let usageTimer = null;
 
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) {
@@ -129,6 +130,7 @@ function currentState() {
     profiles: store.allProfiles(),
     running: status.running,
     unverified: status.unverified,
+    usage: status.usage || {},
     installation: status.installation,
     claudePathOverride: store.settings.claudePath || null,
     dataPath: paths.profilesRoot(),
@@ -316,6 +318,9 @@ app.whenReady().then(async () => {
 
   // One cheap timer keeps running-state, the tray, and the UI in agreement.
   statusTimer = setInterval(pushState, 2500);
+  // Memory costs a process spawn to read, so it runs on a slower clock.
+  usageTimer = setInterval(() => launcher.refreshUsage().then(pushState), 5000);
+  launcher.refreshUsage().then(pushState);
 
   nativeTheme.on('updated', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -336,4 +341,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   if (statusTimer) clearInterval(statusTimer);
+  if (usageTimer) clearInterval(usageTimer);
 });

@@ -36,6 +36,8 @@ class Launcher {
     this.running = new Map(); // profileId -> { pid, startedAt }
     this.unverified = new Set(); // profileId
     this.installation = null;
+    this.usage = {};
+    this.usageInFlight = false;
     this.refreshInstallation();
   }
 
@@ -63,7 +65,25 @@ class Launcher {
       installation: this.installation,
       running,
       unverified: [...this.unverified],
+      usage: this.usage,
     };
+  }
+
+  /**
+   * Refreshes memory stats on their own slower cadence. Reading them costs a
+   * process spawn on both platforms, which is far too expensive to repeat at
+   * the rate the rest of the status updates.
+   */
+  async refreshUsage() {
+    if (this.usageInFlight) return;
+    this.usageInFlight = true;
+    try {
+      this.usage = await this.usageByProfile();
+    } catch {
+      /* leave the previous reading in place */
+    } finally {
+      this.usageInFlight = false;
+    }
   }
 
   isRunning(id) {
@@ -288,6 +308,94 @@ class Launcher {
         this.running.set(id, { pid, startedAt: Date.now() });
       }
     }
+  }
+
+  /**
+   * Memory and process count per profile.
+   *
+   * Attribution is by --user-data-dir rather than by walking the process tree,
+   * because Chromium passes that switch down to every helper it spawns - even
+   * when the top-level process was launched without it, in which case the
+   * helpers carry the resolved default directory. So the switch identifies the
+   * owner of every process in the tree, which a parent-pid walk would have to
+   * reconstruct and would get wrong whenever a helper is reparented.
+   */
+  async usageByProfile() {
+    const byDirectory = new Map();
+    byDirectory.set(
+      path.resolve(paths.mainClaudeDirectory()).toLowerCase(),
+      paths.MAIN_ID
+    );
+    for (const profile of this.store.list()) {
+      byDirectory.set(
+        path.resolve(paths.dataDirectory(profile.id)).toLowerCase(),
+        profile.id
+      );
+    }
+
+    const usage = {};
+    for (const { dataDir, memoryBytes } of await this.processStats()) {
+      // No switch at all means the top-level process of the default install.
+      const id = dataDir === null
+        ? paths.MAIN_ID
+        : byDirectory.get(path.resolve(dataDir).toLowerCase());
+      if (!id) continue;
+      if (!usage[id]) usage[id] = { processes: 0, memoryBytes: 0 };
+      usage[id].processes += 1;
+      usage[id].memoryBytes += memoryBytes;
+    }
+    return usage;
+  }
+
+  /** Every Claude process with its resident memory and owning directory. */
+  async processStats() {
+    const stats = [];
+
+    if (process.platform === 'darwin') {
+      const executable = this.installation ? this.installation.executable : null;
+      if (!executable) return stats;
+      const output = await execFileAsync('/bin/ps', ['-axo', 'pid=,rss=,command=']);
+      for (const line of output.split('\n')) {
+        const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+        if (!match) continue;
+        const command = match[3];
+        if (!command.startsWith(executable)) continue;
+        stats.push({
+          pid: Number(match[1]),
+          memoryBytes: Number(match[2]) * 1024, // ps reports RSS in KB
+          dataDir: command.includes(USER_DATA_FLAG) ? extractDataDir(command) : null,
+        });
+      }
+      return stats;
+    }
+
+    if (process.platform === 'win32') {
+      const output = await execFileAsync('powershell', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-CimInstance Win32_Process -Filter \"Name='claude.exe'\" | Select-Object ProcessId,WorkingSetSize,CommandLine | ConvertTo-Json -Compress",
+      ]);
+      if (!output.trim()) return stats;
+      let parsed;
+      try {
+        parsed = JSON.parse(output);
+      } catch {
+        return stats;
+      }
+      for (const row of Array.isArray(parsed) ? parsed : [parsed]) {
+        if (!row || !row.CommandLine) continue;
+        stats.push({
+          pid: Number(row.ProcessId),
+          memoryBytes: Number(row.WorkingSetSize) || 0,
+          dataDir: row.CommandLine.includes(USER_DATA_FLAG)
+            ? extractDataDir(row.CommandLine)
+            : null,
+        });
+      }
+    }
+
+    return stats;
   }
 
   // Returns only the top-level Claude processes: helper processes (renderer,

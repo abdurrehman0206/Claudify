@@ -272,6 +272,97 @@ button:disabled:active {
   margin-bottom: 11px;
 }
 
+.filter-row.subtle {
+  margin-top: -4px;
+  margin-bottom: 13px;
+}
+
+.search {
+  flex: 1;
+  min-width: 190px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.check input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* ------------------------------------------------------- session groups */
+
+.group {
+  margin-bottom: 14px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 4px;
+  margin-bottom: 5px;
+  color: var(--text-dim);
+}
+
+.group-header:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.group-header svg {
+  transition: transform 0.16s ease;
+}
+
+.group-header[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+
+.group-label {
+  font-size: 12px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.group-label.accent {
+  color: var(--accent);
+}
+
+.group-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  background: var(--surface-hover);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
 .segmented {
   display: inline-flex;
   background: var(--surface);

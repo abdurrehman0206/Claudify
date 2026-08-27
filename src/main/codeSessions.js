@@ -94,6 +94,22 @@ function summarise(text, limit = 120) {
   return `${clean.slice(0, limit - 1)}…`;
 }
 
+// Keyed by path, invalidated on mtime or size change. The interesting fields
+// all come from the head of the file and never change once written, so a
+// refresh only has to re-read transcripts that actually moved -- which is what
+// makes polling this list cheap enough to do while the tab is open.
+const describeCache = new Map();
+
+function describeTranscriptCached(file, stat) {
+  const hit = describeCache.get(file);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) {
+    return hit.detail;
+  }
+  const detail = describeTranscript(file);
+  describeCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, detail });
+  return detail;
+}
+
 /**
  * Derives what we can from the head of a transcript: the working directory it
  * ran in, the git branch, and the first thing the user actually asked, which
@@ -236,7 +252,7 @@ function listSessions(profiles) {
       }
       if (stat.size === 0) continue;
 
-      const detail = describeTranscript(file);
+      const detail = describeTranscriptCached(file, stat);
       const ageDays = (Date.now() - stat.mtimeMs) / 86400000;
       sessions.push({
         id,

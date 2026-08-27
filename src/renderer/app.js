@@ -10,6 +10,7 @@ let state = {
   unverified: [],
   installation: null,
   claudePathOverride: null,
+  usage: {},
   loadError: null,
 };
 
@@ -177,9 +178,19 @@ function buildCard(profile) {
 
   const meta = document.createElement('div');
   meta.className = 'card-meta';
-  meta.textContent = running
-    ? `Running · pid ${state.running[profile.id].pid}`
-    : relativeTime(profile.lastLaunchedAt);
+  if (running) {
+    const usage = (state.usage || {})[profile.id];
+    const bits = ['Running'];
+    // Each instance is a full Claude, so what it costs is worth seeing before
+    // you decide to keep a fourth one open.
+    if (usage && usage.memoryBytes) {
+      bits.push(formatBytes(usage.memoryBytes));
+      bits.push(`${usage.processes} process${usage.processes === 1 ? '' : 'es'}`);
+    }
+    meta.textContent = bits.join(' · ');
+  } else {
+    meta.textContent = relativeTime(profile.lastLaunchedAt);
+  }
   body.appendChild(meta);
 
   if (unverified) {
@@ -303,6 +314,12 @@ function renderSubtitle() {
   const parts = [];
   if (count) parts.push(`${count} profile${count === 1 ? '' : 's'}`);
   if (active) parts.push(`${active} running`);
+
+  const total = Object.entries(state.usage || {})
+    .filter(([id]) => state.running[id])
+    .reduce((sum, [, usage]) => sum + (usage.memoryBytes || 0), 0);
+  if (total) parts.push(formatBytes(total));
+
   $('subtitle').textContent = parts.length
     ? parts.join(' · ')
     : 'Separate Claude Desktop sessions, side by side.';
@@ -321,7 +338,11 @@ let activeTab = 'profiles';
 let sessions = [];
 let sessionsLoaded = false;
 let openTarget = null;
-let sessionFilter = 'all';
+let sessionGrouping = 'profile';
+let sessionSearch = '';
+let orphansOnly = false;
+const collapsedGroups = new Set();
+let sessionTimer = null;
 let retention = 30;
 
 function switchTab(name) {
@@ -331,11 +352,19 @@ function switchTab(name) {
   $('tab-profiles').setAttribute('aria-selected', String(name === 'profiles'));
   $('tab-sessions').setAttribute('aria-selected', String(name === 'sessions'));
   $('new-btn').classList.toggle('hidden', name !== 'profiles');
-  if (name === 'sessions' && !sessionsLoaded) loadSessions();
+  if (name === 'sessions') {
+    if (!sessionsLoaded) loadSessions();
+    // Transcripts change while you work, so keep the list live -- but only
+    // while it is on screen, and only re-reading files whose mtime moved.
+    if (!sessionTimer) sessionTimer = setInterval(loadSessions, 8000);
+  } else if (sessionTimer) {
+    clearInterval(sessionTimer);
+    sessionTimer = null;
+  }
 }
 
 async function loadSessions() {
-  $('sessions-status').textContent = 'Looking for Claude Code sessions…';
+  if (!sessionsLoaded) $('sessions-status').textContent = 'Looking for Claude Code sessions…';
   const result = await api.listSessions();
   sessionsLoaded = true;
 
@@ -432,33 +461,141 @@ function buildSessionRow(session) {
   return li;
 }
 
+function matchesSearch(session) {
+  if (!sessionSearch) return true;
+  const needle = sessionSearch.toLowerCase();
+  return (
+    (session.title || '').toLowerCase().includes(needle) ||
+    (session.cwd || '').toLowerCase().includes(needle) ||
+    (session.gitBranch || '').toLowerCase().includes(needle)
+  );
+}
+
 function visibleSessions() {
-  return sessionFilter === 'orphans'
-    ? sessions.filter((session) => session.owners.length === 0)
-    : sessions;
+  return sessions.filter(
+    (session) =>
+      matchesSearch(session) && (!orphansOnly || session.owners.length === 0)
+  );
+}
+
+function projectLabel(session) {
+  if (!session.cwd) return 'Unknown project';
+  const parts = session.cwd.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || session.cwd;
+}
+
+/**
+ * Grouped rather than one flat list, because the question people actually have
+ * is "which sessions are where" - and a session held by two profiles genuinely
+ * belongs under both, so it is listed twice rather than arbitrarily assigned.
+ */
+function groupSessions() {
+  const shown = visibleSessions();
+  const groups = [];
+
+  if (sessionGrouping === 'project') {
+    const byProject = new Map();
+    for (const session of shown) {
+      const key = projectLabel(session);
+      if (!byProject.has(key)) byProject.set(key, []);
+      byProject.get(key).push(session);
+    }
+    for (const [label, items] of [...byProject].sort((a, b) => b[1].length - a[1].length)) {
+      groups.push({ key: `project:${label}`, label, sessions: items });
+    }
+    return groups;
+  }
+
+  for (const profile of state.profiles) {
+    const items = shown.filter((session) =>
+      session.owners.some((owner) => owner.id === profile.id)
+    );
+    if (items.length) {
+      groups.push({ key: `profile:${profile.id}`, label: profile.name, sessions: items });
+    }
+  }
+
+  // Owners can name a profile Claudify no longer manages (an old install, or a
+  // deleted profile). Those are still "somewhere", just not here.
+  const known = new Set(state.profiles.map((p) => p.id));
+  const elsewhere = shown.filter(
+    (s) => s.owners.length > 0 && !s.owners.some((o) => known.has(o.id))
+  );
+  if (elsewhere.length) {
+    groups.push({ key: 'elsewhere', label: 'In another install', sessions: elsewhere });
+  }
+
+  const orphans = shown.filter((session) => session.owners.length === 0);
+  if (orphans.length) {
+    groups.push({
+      key: 'orphans',
+      label: 'Not in any profile',
+      accent: true,
+      sessions: orphans,
+    });
+  }
+
+  return groups;
 }
 
 function renderSessions() {
-  const list = $('session-list');
-  list.textContent = '';
+  const host = $('session-groups');
+  host.textContent = '';
 
-  const shown = visibleSessions();
-  $('filter-all').setAttribute('aria-pressed', String(sessionFilter === 'all'));
-  $('filter-orphans').setAttribute('aria-pressed', String(sessionFilter === 'orphans'));
+  $('group-profile').setAttribute('aria-pressed', String(sessionGrouping === 'profile'));
+  $('group-project').setAttribute('aria-pressed', String(sessionGrouping === 'project'));
 
-  const orphans = sessions.filter((s) => s.owners.length === 0).length;
-  $('filter-all').textContent = `All (${sessions.length})`;
-  $('filter-orphans').textContent = `Not in any profile (${orphans})`;
+  const orphanCount = sessions.filter((s) => s.owners.length === 0).length;
+  $('sessions-status').textContent = sessions.length
+    ? `${sessions.length} on this computer · ${orphanCount} in no profile · kept ${retention} days`
+    : 'No sessions found yet. Use Claude Code once and they will appear here.';
 
-  if (shown.length === 0 && sessions.length > 0) {
-    const note = document.createElement('li');
+  const groups = groupSessions();
+  if (groups.length === 0) {
+    const note = document.createElement('p');
     note.className = 'hint';
-    note.textContent = 'Every session on this computer is already in a profile.';
-    list.appendChild(note);
+    note.textContent = sessions.length
+      ? 'Nothing matches that filter.'
+      : 'Nothing to show yet.';
+    host.appendChild(note);
     return;
   }
 
-  for (const session of shown) list.appendChild(buildSessionRow(session));
+  for (const group of groups) {
+    const section = document.createElement('section');
+    section.className = 'group';
+
+    const header = document.createElement('button');
+    header.className = 'group-header';
+    header.setAttribute('aria-expanded', String(!collapsedGroups.has(group.key)));
+    header.appendChild(svg(ICON.chevron, 13));
+
+    const label = document.createElement('span');
+    label.className = group.accent ? 'group-label accent' : 'group-label';
+    label.textContent = group.label;
+    header.appendChild(label);
+
+    const count = document.createElement('span');
+    count.className = 'group-count';
+    count.textContent = String(group.sessions.length);
+    header.appendChild(count);
+
+    header.addEventListener('click', () => {
+      if (collapsedGroups.has(group.key)) collapsedGroups.delete(group.key);
+      else collapsedGroups.add(group.key);
+      renderSessions();
+    });
+    section.appendChild(header);
+
+    if (!collapsedGroups.has(group.key)) {
+      const list = document.createElement('ul');
+      list.className = 'session-list';
+      for (const session of group.sessions) list.appendChild(buildSessionRow(session));
+      section.appendChild(list);
+    }
+
+    host.appendChild(section);
+  }
 }
 
 function openSessionDialog(session) {
@@ -931,8 +1068,22 @@ function wire() {
   });
   $('reveal-root').addEventListener('click', () => api.revealRoot());
 
-  $('filter-all').addEventListener('click', () => { sessionFilter = 'all'; renderSessions(); });
-  $('filter-orphans').addEventListener('click', () => { sessionFilter = 'orphans'; renderSessions(); });
+  $('group-profile').addEventListener('click', () => {
+    sessionGrouping = 'profile';
+    renderSessions();
+  });
+  $('group-project').addEventListener('click', () => {
+    sessionGrouping = 'project';
+    renderSessions();
+  });
+  $('filter-orphans').addEventListener('change', (event) => {
+    orphansOnly = event.target.checked;
+    renderSessions();
+  });
+  $('session-search').addEventListener('input', (event) => {
+    sessionSearch = event.target.value.trim();
+    renderSessions();
+  });
 
   $('tab-profiles').addEventListener('click', () => switchTab('profiles'));
   $('tab-sessions').addEventListener('click', () => switchTab('sessions'));

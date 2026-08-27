@@ -44,13 +44,26 @@
           through Claude's own import.
         </p>
         <div class="filter-row">
-          <div class="segmented" role="group" aria-label="Filter sessions">
-            <button id="filter-all" class="segment" aria-pressed="true">All</button>
-            <button id="filter-orphans" class="segment" aria-pressed="false">Not in any profile</button>
+          <input
+            id="session-search"
+            class="search"
+            type="text"
+            placeholder="Search by title, project or path…"
+            autocomplete="off"
+          />
+          <div class="segmented" role="group" aria-label="Group sessions by">
+            <button id="group-profile" class="segment" aria-pressed="true">By profile</button>
+            <button id="group-project" class="segment" aria-pressed="false">By project</button>
           </div>
-          <span id="sessions-status" class="hint"></span>
         </div>
-        <ul id="session-list" class="session-list"></ul>
+        <div class="filter-row subtle">
+          <span id="sessions-status" class="hint"></span>
+          <label class="check">
+            <input id="filter-orphans" type="checkbox" />
+            <span>Only sessions not in any profile</span>
+          </label>
+        </div>
+        <div id="session-groups"></div>
       </section>
 
       <section id="view-profiles">
