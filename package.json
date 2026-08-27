@@ -5,6 +5,14 @@
   "main": "src/main/main.js",
   "license": "MIT",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abdurrehman0206/Claudify.git"
+  },
+  "homepage": "https://github.com/abdurrehman0206/Claudify#readme",
+  "bugs": {
+    "url": "https://github.com/abdurrehman0206/Claudify/issues"
+  },
   "engines": {
     "node": ">=18"
   },
@@ -33,6 +41,7 @@
       "!**/*.map"
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "publish": null,
     "mac": {
       "category": "public.app-category.utilities",
       "darkModeSupport": true,

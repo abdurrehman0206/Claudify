@@ -45,10 +45,13 @@ jobs:
       - name: Build installers
         run: ${{ matrix.command }}
         env:
+          # No GH_TOKEN here on purpose: electron-builder treats its presence in
+          # CI as "publish to GitHub Releases yourself". Uploading is the publish
+          # job's business, and `"publish": null` in package.json backs this up.
+          #
           # Unsigned builds. Set CSC_LINK / CSC_KEY_PASSWORD (macOS) or
           # WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD (Windows) as repository secrets
           # to sign, which removes the Gatekeeper and SmartScreen warnings.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload artifacts
