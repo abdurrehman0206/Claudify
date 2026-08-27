@@ -71,10 +71,14 @@ Grab the build for your platform from the
 
 | Platform | Download | Notes |
 |---|---|---|
-| macOS (Apple Silicon) | `Claudify-*-mac-arm64.dmg` | |
-| macOS (Intel) | `Claudify-*-mac-x64.dmg` | |
+| macOS (Apple Silicon) | `Claudify-*-mac-arm64.dmg` | Open it, drag to Applications |
+| macOS (Intel) | `Claudify-*-mac-x64.zip` | Unzip, move `Claudify.app` to Applications |
 | Windows | `Claudify-*-win-x64-setup.exe` | Installer |
 | Windows (no install) | `Claudify-*-win-x64-portable.exe` | Run in place |
+
+Intel Macs get a `.zip` rather than a `.dmg`: the release runners are Apple
+Silicon, and `hdiutil` cannot build an Intel DMG from one. The `.app` inside is
+the same build.
 
 ### The builds are unsigned
 
