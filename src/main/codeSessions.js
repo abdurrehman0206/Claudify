@@ -134,10 +134,20 @@ function describeTranscript(file) {
     if (!result.version && record.version) result.version = record.version;
     if (!result.startedAt && record.timestamp) result.startedAt = record.timestamp;
 
-    if (!result.title && record.type === 'user' && record.isSidechain !== true) {
+    // Only used when Claude has no title of its own. Compaction preambles
+    // ("This session is being continued from a previous conversation…") are
+    // user turns the user never wrote, and they open more than half of all
+    // transcripts, so taking the first user message naively labelled most
+    // sessions identically and uselessly.
+    const isSynthetic =
+      record.isCompactSummary === true || record.isVisibleInTranscriptOnly === true;
+
+    if (!result.title && record.type === 'user' && record.isSidechain !== true && !isSynthetic) {
       const text = summarise(messageText(record.message));
       // Skip command wrappers and system-injected turns; they make poor titles.
-      if (text && !text.startsWith('<')) result.title = text;
+      if (text && !text.startsWith('<') && !/^Caveat: The messages below/i.test(text)) {
+        result.title = text;
+      }
     }
 
     if (result.cwd && result.title) break;
@@ -146,6 +156,63 @@ function describeTranscript(file) {
 }
 
 const CLI_SESSION_ID = /"cliSessionId"\s*:\s*"([0-9a-f-]{36})"/;
+const TITLE = /"title"\s*:\s*"((?:\\.|[^"\\])*)"/;
+const TITLE_SOURCE = /"titleSource"\s*:\s*"([^"]*)"/;
+const ARCHIVED = /"isArchived"\s*:\s*(true|false)/;
+
+// Session records are mostly a large embedded MCP config, so they are read
+// once per mtime rather than on every refresh.
+const recordCache = new Map();
+
+/**
+ * Pulls what Claude itself knows about a session out of one of its records.
+ * Its own title is far better than anything derivable from the transcript:
+ * it is what the sidebar shows, and it is the one the user set when they
+ * renamed a session by hand.
+ */
+function readSessionRecord(file) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return null;
+  }
+
+  const hit = recordCache.get(file);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.value;
+
+  const head = readHead(file);
+  let value = null;
+
+  // The head is the whole file for most records, so parsing is exact when it
+  // works; the regexes are the fallback for the few that are larger.
+  try {
+    const parsed = JSON.parse(head);
+    value = {
+      cliSessionId: parsed.cliSessionId || null,
+      title: typeof parsed.title === 'string' ? parsed.title.trim() : '',
+      titleSource: parsed.titleSource || null,
+      archived: parsed.isArchived === true,
+    };
+  } catch {
+    const id = CLI_SESSION_ID.exec(head);
+    if (id) {
+      const title = TITLE.exec(head);
+      const source = TITLE_SOURCE.exec(head);
+      const archived = ARCHIVED.exec(head);
+      value = {
+        cliSessionId: id[1],
+        title: title ? title[1].replace(/\\(.)/g, '$1').trim() : '',
+        titleSource: source ? source[1] : null,
+        archived: archived ? archived[1] === 'true' : false,
+      };
+    }
+  }
+
+  if (value && !value.cliSessionId) value = null;
+  recordCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+  return value;
+}
 
 /**
  * Which profiles already hold each transcript, found by reading the
@@ -158,6 +225,7 @@ const CLI_SESSION_ID = /"cliSessionId"\s*:\s*"([0-9a-f-]{36})"/;
  */
 function ownersBySession(profiles) {
   const owners = new Map();
+  const known = new Map(); // cliSessionId -> { title, titleSource, archived }
 
   const scan = (baseDir, id, label) => {
     const root = path.join(baseDir, 'claude-code-sessions');
@@ -186,11 +254,20 @@ function ownersBySession(profiles) {
         }
         for (const file of files) {
           if (!file.endsWith('.json')) continue;
-          const match = CLI_SESSION_ID.exec(readHead(path.join(dir, file)));
-          if (!match) continue;
-          const list = owners.get(match[1]) || [];
+          const record = readSessionRecord(path.join(dir, file));
+          if (!record) continue;
+
+          const list = owners.get(record.cliSessionId) || [];
           if (!list.some((entry) => entry.id === id)) list.push({ id, label });
-          owners.set(match[1], list);
+          owners.set(record.cliSessionId, list);
+
+          // Prefer a title the user set themselves over an auto-generated one.
+          const existing = known.get(record.cliSessionId);
+          const better =
+            !existing ||
+            (record.titleSource === 'user' && existing.titleSource !== 'user') ||
+            (!existing.title && record.title);
+          if (better && record.title) known.set(record.cliSessionId, record);
         }
       }
     }
@@ -200,7 +277,7 @@ function ownersBySession(profiles) {
   for (const profile of profiles || []) {
     scan(paths.dataDirectory(profile.id), profile.id, profile.name);
   }
-  return owners;
+  return { owners, known };
 }
 
 /** The stock Claude Desktop user-data directory. */
@@ -224,7 +301,7 @@ function listSessions(profiles) {
     return { available: false, root, sessions: [] };
   }
 
-  const owners = ownersBySession(profiles);
+  const { owners, known } = ownersBySession(profiles);
   const keepDays = retentionDays();
   const sessions = [];
   for (const dir of projectDirs) {
@@ -253,12 +330,17 @@ function listSessions(profiles) {
       if (stat.size === 0) continue;
 
       const detail = describeTranscriptCached(file, stat);
+      const record = known.get(id);
       const ageDays = (Date.now() - stat.mtimeMs) / 86400000;
       sessions.push({
         id,
         project: dir.name,
         cwd: detail.cwd || null,
-        title: detail.title || null,
+        // Claude's own title first: it is what its sidebar shows and what the
+        // user set if they renamed the session themselves.
+        title: (record && record.title) || detail.title || null,
+        titleSource: record ? record.titleSource : null,
+        archived: Boolean(record && record.archived),
         gitBranch: detail.gitBranch || null,
         startedAt: detail.startedAt || null,
         lastActivityAt: stat.mtime.toISOString(),

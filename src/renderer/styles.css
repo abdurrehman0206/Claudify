@@ -413,6 +413,12 @@ button:disabled:active {
   flex-wrap: wrap;
 }
 
+.card.session .name.untitled {
+  color: var(--text-dim);
+  font-style: italic;
+  font-weight: 500;
+}
+
 .card.session .card-meta {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     monospace;

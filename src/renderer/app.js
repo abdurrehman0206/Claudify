@@ -401,8 +401,22 @@ function buildSessionRow(session) {
   title.className = 'card-name';
   const name = document.createElement('span');
   name.className = 'name';
-  name.textContent = session.title || session.id;
+  // A raw UUID tells you nothing. When neither Claude nor the transcript
+  // yields a title, the project and when it last ran at least narrow it down.
+  name.textContent =
+    session.title ||
+    (session.cwd
+      ? `${projectLabel(session)} · ${relativeTime(session.lastActivityAt).replace('Last opened ', '')}`
+      : session.id);
+  if (!session.title) name.classList.add('untitled');
   title.appendChild(name);
+
+  if (session.archived) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = 'archived';
+    title.appendChild(tag);
+  }
 
   // A session no profile holds is the one worth acting on: it exists on disk
   // but is in nobody's list, which is exactly what an account switch strands.
