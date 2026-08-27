@@ -1,6 +1,6 @@
 {
   "name": "claudify",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Run multiple Claude Desktop accounts side by side, on macOS and Windows.",
   "main": "src/main/main.js",
   "license": "MIT",
