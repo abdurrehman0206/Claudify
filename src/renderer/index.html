@@ -62,11 +62,11 @@
           <span>Colour</span>
           <div id="editor-colors" class="swatches"></div>
         </div>
-        <label class="field" id="editor-mcp-field">
+        <div class="field" id="editor-mcp-field">
           <span>MCP servers</span>
-          <select id="editor-mcp"></select>
+          <div class="dropdown" id="editor-mcp"></div>
           <small class="hint" id="editor-mcp-hint"></small>
-        </label>
+        </div>
         <p id="editor-hint" class="hint">
           A new profile starts signed out. Open it and sign in with the account
           you want it to hold.
@@ -118,11 +118,11 @@
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mcp-title">
         <h2 id="mcp-title">Copy MCP configuration</h2>
         <p class="hint" id="mcp-target"></p>
-        <label class="field">
+        <div class="field">
           <span>Copy from</span>
-          <select id="mcp-source"></select>
+          <div class="dropdown" id="mcp-source"></div>
           <small class="hint" id="mcp-source-hint"></small>
-        </label>
+        </div>
         <p class="hint">
           Only <code>claude_desktop_config.json</code> is copied — never the
           signed-in session. The profile's existing file is kept alongside as a

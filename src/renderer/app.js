@@ -47,6 +47,7 @@ const ICON = {
   check: ['M20 6 9 17l-5-5'],
   stop: ['M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z'],
   dots: ['M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2', 'M19 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2', 'M5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2'],
+  chevron: ['m6 9 6 6 6-6'],
 };
 
 function initials(name) {
@@ -318,7 +319,7 @@ function openEditor(profile) {
   // profile's MCP servers.
   $('editor-mcp-field').classList.toggle('hidden', Boolean(profile));
   if (!profile) {
-    populateSources($('editor-mcp'), $('editor-mcp-hint'), {
+    populateSources('editor-mcp', 'editor-mcp-hint', {
       excludeProfileId: null,
       includeNone: true,
     });
@@ -334,6 +335,198 @@ function openEditor(profile) {
   input.select();
 }
 
+// -------------------------------------------------------------- dropdown
+
+// A native <select> renders with the OS popup, which looks nothing like the
+// rest of the app. This is a real listbox instead: same visual language as the
+// row menus, and it keeps the keyboard behaviour a select would have given us.
+let openDropdown = null;
+
+function createDropdown(host) {
+  host.textContent = '';
+  host.classList.add('dropdown');
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'dropdown-trigger';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+
+  const valueLabel = document.createElement('span');
+  valueLabel.className = 'dropdown-value';
+  trigger.appendChild(valueLabel);
+  trigger.appendChild(svg(ICON.chevron, 14));
+
+  const panel = document.createElement('div');
+  panel.className = 'dropdown-panel';
+  panel.setAttribute('role', 'listbox');
+  panel.hidden = true;
+
+  host.append(trigger, panel);
+
+  let options = [];
+  let value = null;
+  let active = -1;
+  let onChange = null;
+
+  const selectable = () => options.filter((option) => !option.disabled);
+
+  function paint() {
+    const chosen = options.find((option) => option.value === value);
+    valueLabel.textContent = chosen ? chosen.label : 'Select…';
+    valueLabel.classList.toggle('placeholder', !chosen);
+
+    panel.textContent = '';
+    options.forEach((option, index) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'dropdown-option';
+      item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', String(option.value === value));
+      if (option.disabled) item.setAttribute('aria-disabled', 'true');
+      item.disabled = Boolean(option.disabled);
+      item.classList.toggle('active', index === active);
+
+      const text = document.createElement('span');
+      text.className = 'dropdown-option-text';
+
+      const label = document.createElement('span');
+      label.className = 'dropdown-option-label';
+      label.textContent = option.label;
+      text.appendChild(label);
+
+      if (option.meta) {
+        const meta = document.createElement('span');
+        meta.className = 'dropdown-option-meta';
+        meta.textContent = option.meta;
+        text.appendChild(meta);
+      }
+
+      item.appendChild(text);
+      if (option.value === value) item.appendChild(svg(ICON.check, 14));
+
+      item.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (option.disabled) return;
+        commit(option.value);
+        close();
+        trigger.focus();
+      });
+      item.addEventListener('mousemove', () => {
+        active = index;
+        highlight();
+      });
+
+      panel.appendChild(item);
+    });
+  }
+
+  function highlight() {
+    [...panel.children].forEach((child, index) => {
+      child.classList.toggle('active', index === active);
+    });
+    const current = panel.children[active];
+    if (current) current.scrollIntoView({ block: 'nearest' });
+  }
+
+  function commit(next) {
+    if (next === value) return;
+    value = next;
+    paint();
+    if (onChange) onChange(value);
+  }
+
+  function open() {
+    if (!options.length) return;
+    if (openDropdown && openDropdown !== close) openDropdown();
+    openDropdown = close;
+    panel.hidden = false;
+    host.dataset.open = 'true';
+    trigger.setAttribute('aria-expanded', 'true');
+    active = options.findIndex((option) => option.value === value);
+    if (active < 0) active = options.findIndex((option) => !option.disabled);
+    highlight();
+  }
+
+  function close() {
+    panel.hidden = true;
+    host.dataset.open = 'false';
+    trigger.setAttribute('aria-expanded', 'false');
+    if (openDropdown === close) openDropdown = null;
+  }
+
+  function step(direction) {
+    if (panel.hidden) return open();
+    const usable = selectable();
+    if (!usable.length) return;
+    let index = active;
+    do {
+      index = (index + direction + options.length) % options.length;
+    } while (options[index].disabled);
+    active = index;
+    highlight();
+  }
+
+  trigger.addEventListener('click', (event) => {
+    event.stopPropagation();
+    panel.hidden ? open() : close();
+  });
+
+  host.addEventListener('keydown', (event) => {
+    switch (event.key) {
+      case 'Escape':
+        if (!panel.hidden) {
+          event.stopPropagation(); // let the dropdown close, not the dialog
+          close();
+          trigger.focus();
+        }
+        return;
+      case 'ArrowDown':
+        event.preventDefault();
+        step(1);
+        return;
+      case 'ArrowUp':
+        event.preventDefault();
+        step(-1);
+        return;
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        if (panel.hidden) return open();
+        if (options[active] && !options[active].disabled) {
+          commit(options[active].value);
+          close();
+          trigger.focus();
+        }
+        return;
+      case 'Tab':
+        close();
+    }
+  });
+
+  return {
+    set(nextOptions, nextValue, handler) {
+      options = nextOptions;
+      value = nextValue;
+      onChange = handler || null;
+      active = -1;
+      close();
+      paint();
+    },
+    get value() {
+      return value;
+    },
+    close,
+  };
+}
+
+const dropdowns = new Map();
+
+function dropdownFor(id) {
+  if (!dropdowns.has(id)) dropdowns.set(id, createDropdown($(id)));
+  return dropdowns.get(id);
+}
+
 // ------------------------------------------------------------ MCP config
 
 function describeSource(source) {
@@ -346,44 +539,49 @@ function describeSource(source) {
   return `${source.servers.length} server${source.servers.length === 1 ? '' : 's'}: ${source.servers.join(', ')}`;
 }
 
-/** Fills a <select> with copy sources. Returns the sources it used. */
-async function populateSources(select, hint, { excludeProfileId, includeNone }) {
+function sourceMeta(source) {
+  if (!source.available) return source.invalid ? 'invalid file' : 'none found';
+  const count = source.servers.length;
+  return count === 1 ? '1 server' : `${count} servers`;
+}
+
+/** Fills a dropdown with copy sources. */
+async function populateSources(hostId, hintId, { excludeProfileId, includeNone }) {
   const sources = await api.mcpSources(excludeProfileId);
-  select.textContent = '';
+  const hint = $(hintId);
+
+  const options = sources.map((source) => ({
+    value: source.id,
+    label: source.label,
+    meta: sourceMeta(source),
+    disabled: !source.available,
+  }));
 
   if (includeNone) {
-    const none = document.createElement('option');
-    none.value = '';
-    none.textContent = 'Start empty';
-    select.appendChild(none);
+    options.unshift({ value: '', label: 'Start empty', meta: 'no servers' });
   }
 
-  for (const source of sources) {
-    const option = document.createElement('option');
-    option.value = source.id;
-    const count = source.available ? ` (${source.servers.length})` : '';
-    option.textContent = `${source.label}${count}`;
-    option.disabled = !source.available;
-    select.appendChild(option);
-  }
-
-  // Default to the main install when it actually has servers to give.
-  const main = sources.find((s) => s.id === 'main');
+  // Default to the main install, but only when it has servers worth copying.
+  const main = sources.find((source) => source.id === 'main');
+  let value;
   if (main && main.available && main.servers.length > 0) {
-    select.value = 'main';
-  } else if (!includeNone) {
-    const firstUsable = sources.find((s) => s.available);
-    select.value = firstUsable ? firstUsable.id : '';
+    value = 'main';
+  } else if (includeNone) {
+    value = '';
+  } else {
+    const usable = sources.find((source) => source.available);
+    value = usable ? usable.id : null;
   }
 
-  const sync = () => {
-    const chosen = sources.find((s) => s.id === select.value);
+  const sync = (selected) => {
+    const chosen = sources.find((source) => source.id === selected);
     hint.textContent = chosen
       ? describeSource(chosen)
-      : 'No servers are copied; you can add them later.';
+      : 'No servers are copied. You can add them later.';
   };
-  select.onchange = sync;
-  sync();
+
+  dropdownFor(hostId).set(options, value, sync);
+  sync(value);
 
   return sources;
 }
@@ -391,7 +589,7 @@ async function populateSources(select, hint, { excludeProfileId, includeNone }) 
 function openMcpDialog(profile) {
   mcpTarget = profile;
   $('mcp-target').textContent = `Into “${profile.name}”. This replaces that profile's current MCP servers.`;
-  populateSources($('mcp-source'), $('mcp-source-hint'), {
+  populateSources('mcp-source', 'mcp-source-hint', {
     excludeProfileId: profile.id,
     includeNone: false,
   });
@@ -440,7 +638,7 @@ async function saveEditor() {
     const result = await api.addProfile({
       name,
       color: editorColor,
-      copyMcpFrom: $('editor-mcp').value || null,
+      copyMcpFrom: dropdownFor('editor-mcp').value || null,
     });
     if (result && result.mcp && result.mcp.error) showError(result.mcp.error);
   }
@@ -555,7 +753,7 @@ function wire() {
   $('mcp-cancel').addEventListener('click', closeMcpDialog);
   $('mcp-confirm').addEventListener('click', async () => {
     if (!mcpTarget) return;
-    const sourceId = $('mcp-source').value;
+    const sourceId = dropdownFor('mcp-source').value;
     if (!sourceId) return closeMcpDialog();
     const result = await api.copyMcp({ profileId: mcpTarget.id, sourceId });
     closeMcpDialog();
@@ -572,8 +770,10 @@ function wire() {
     await refresh();
   });
 
-  // Click outside closes the open row menu; Escape closes whatever is on top.
+  // Click outside closes the open dropdown or row menu; Escape closes whatever
+  // is on top.
   document.addEventListener('click', () => {
+    if (openDropdown) openDropdown();
     if (openMenuId) {
       openMenuId = null;
       renderList();
