@@ -18,6 +18,7 @@ let editorColor = 'blue';
 let deleteTarget = null;
 let openMenuId = null;
 let dismissedError = null;
+let mcpTarget = null;
 
 // ------------------------------------------------------------- utilities
 
@@ -258,6 +259,7 @@ function buildMenu(profile) {
 
   item('Rename…', () => openEditor(profile));
   item('Show data folder', () => api.reveal(profile.id));
+  item('Copy MCP config from…', () => openMcpDialog(profile));
   item('Edit MCP config', () => api.openMcpConfig(profile.id));
   menu.appendChild(document.createElement('hr'));
   item('Delete profile…', () => confirmDelete(profile), true);
@@ -312,6 +314,16 @@ function openEditor(profile) {
   $('editor-save').textContent = profile ? 'Save' : 'Create';
   $('editor-hint').classList.toggle('hidden', Boolean(profile));
 
+  // Only offered when creating: renaming should never silently rewrite the
+  // profile's MCP servers.
+  $('editor-mcp-field').classList.toggle('hidden', Boolean(profile));
+  if (!profile) {
+    populateSources($('editor-mcp'), $('editor-mcp-hint'), {
+      excludeProfileId: null,
+      includeNone: true,
+    });
+  }
+
   const input = $('editor-name');
   input.value = profile ? profile.name : '';
   syncEditorSaveState();
@@ -320,6 +332,75 @@ function openEditor(profile) {
   $('editor-backdrop').classList.remove('hidden');
   input.focus();
   input.select();
+}
+
+// ------------------------------------------------------------ MCP config
+
+function describeSource(source) {
+  if (!source.available) {
+    return source.invalid
+      ? 'That file is not valid JSON, so it cannot be copied.'
+      : 'No MCP configuration found here yet.';
+  }
+  if (source.servers.length === 0) return 'Configuration found, but no servers in it.';
+  return `${source.servers.length} server${source.servers.length === 1 ? '' : 's'}: ${source.servers.join(', ')}`;
+}
+
+/** Fills a <select> with copy sources. Returns the sources it used. */
+async function populateSources(select, hint, { excludeProfileId, includeNone }) {
+  const sources = await api.mcpSources(excludeProfileId);
+  select.textContent = '';
+
+  if (includeNone) {
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'Start empty';
+    select.appendChild(none);
+  }
+
+  for (const source of sources) {
+    const option = document.createElement('option');
+    option.value = source.id;
+    const count = source.available ? ` (${source.servers.length})` : '';
+    option.textContent = `${source.label}${count}`;
+    option.disabled = !source.available;
+    select.appendChild(option);
+  }
+
+  // Default to the main install when it actually has servers to give.
+  const main = sources.find((s) => s.id === 'main');
+  if (main && main.available && main.servers.length > 0) {
+    select.value = 'main';
+  } else if (!includeNone) {
+    const firstUsable = sources.find((s) => s.available);
+    select.value = firstUsable ? firstUsable.id : '';
+  }
+
+  const sync = () => {
+    const chosen = sources.find((s) => s.id === select.value);
+    hint.textContent = chosen
+      ? describeSource(chosen)
+      : 'No servers are copied; you can add them later.';
+  };
+  select.onchange = sync;
+  sync();
+
+  return sources;
+}
+
+function openMcpDialog(profile) {
+  mcpTarget = profile;
+  $('mcp-target').textContent = `Into “${profile.name}”. This replaces that profile's current MCP servers.`;
+  populateSources($('mcp-source'), $('mcp-source-hint'), {
+    excludeProfileId: profile.id,
+    includeNone: false,
+  });
+  $('mcp-backdrop').classList.remove('hidden');
+}
+
+function closeMcpDialog() {
+  $('mcp-backdrop').classList.add('hidden');
+  mcpTarget = null;
 }
 
 function syncEditorSaveState() {
@@ -356,7 +437,12 @@ async function saveEditor() {
   if (editorTarget) {
     await api.updateProfile({ id: editorTarget.id, name, color: editorColor });
   } else {
-    await api.addProfile({ name, color: editorColor });
+    const result = await api.addProfile({
+      name,
+      color: editorColor,
+      copyMcpFrom: $('editor-mcp').value || null,
+    });
+    if (result && result.mcp && result.mcp.error) showError(result.mcp.error);
   }
   closeEditor();
   await refresh();
@@ -466,6 +552,17 @@ function wire() {
   });
   $('reveal-root').addEventListener('click', () => api.revealRoot());
 
+  $('mcp-cancel').addEventListener('click', closeMcpDialog);
+  $('mcp-confirm').addEventListener('click', async () => {
+    if (!mcpTarget) return;
+    const sourceId = $('mcp-source').value;
+    if (!sourceId) return closeMcpDialog();
+    const result = await api.copyMcp({ profileId: mcpTarget.id, sourceId });
+    closeMcpDialog();
+    if (result && result.error) showError(result.error);
+    await refresh();
+  });
+
   $('confirm-cancel').addEventListener('click', closeConfirm);
   $('confirm-delete').addEventListener('click', async () => {
     if (!deleteTarget) return;
@@ -486,6 +583,7 @@ function wire() {
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!$('confirm-backdrop').classList.contains('hidden')) return closeConfirm();
+    if (!$('mcp-backdrop').classList.contains('hidden')) return closeMcpDialog();
     if (!$('editor-backdrop').classList.contains('hidden')) return closeEditor();
     if (!$('settings-backdrop').classList.contains('hidden')) return closeSettings();
     if (openMenuId) {
@@ -494,7 +592,7 @@ function wire() {
     }
   });
 
-  for (const id of ['editor-backdrop', 'settings-backdrop', 'confirm-backdrop']) {
+  for (const id of ['editor-backdrop', 'settings-backdrop', 'confirm-backdrop', 'mcp-backdrop']) {
     $(id).addEventListener('click', (event) => {
       if (event.target.id === id) $(id).classList.add('hidden');
     });

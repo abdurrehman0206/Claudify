@@ -15,6 +15,7 @@ const {
 
 const paths = require('./paths');
 const locator = require('./locator');
+const mcpConfig = require('./mcpConfig');
 const icon = require('./icon');
 const { Store, COLORS } = require('./store');
 const { Launcher } = require('./launcher');
@@ -165,9 +166,30 @@ function registerIPC() {
   handle('state:get', () => currentState());
 
   handle('profile:add', (_event, payload) => {
-    store.add(payload || {});
+    const options = payload || {};
+    const profile = store.add(options);
+
+    // A brand-new profile starts with no MCP servers, because Claude reads them
+    // from inside the user-data directory. Copying them across on creation is
+    // what makes a new profile feel like signing in as another account rather
+    // than starting from nothing.
+    let mcp = null;
+    if (options.copyMcpFrom) {
+      mcp = mcpConfig.copyInto(profile.id, options.copyMcpFrom);
+    }
+
     pushState();
-    return { ok: true };
+    return { ok: true, profile, mcp };
+  });
+
+  handle('mcp:sources', (_event, excludeProfileId) =>
+    mcpConfig.listSources(store.list(), excludeProfileId)
+  );
+
+  handle('mcp:copy', (_event, { profileId, sourceId }) => {
+    const result = mcpConfig.copyInto(profileId, sourceId);
+    pushState();
+    return result;
   });
 
   handle('profile:update', (_event, { id, name, color }) => {

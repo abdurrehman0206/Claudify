@@ -1,6 +1,6 @@
 {
   "name": "claudify",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Run multiple Claude Desktop accounts side by side, on macOS and Windows.",
   "main": "src/main/main.js",
   "license": "MIT",
@@ -42,13 +42,25 @@
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "publish": null,
+    "afterPack": "tools/afterPack.js",
     "mac": {
       "category": "public.app-category.utilities",
       "darkModeSupport": true,
       "icon": "build/icon.png",
       "target": [
-        { "target": "dmg", "arch": ["arm64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "identity": null,
       "extendInfo": {
@@ -59,15 +71,34 @@
     "dmg": {
       "title": "${productName}",
       "contents": [
-        { "x": 140, "y": 200, "type": "file" },
-        { "x": 400, "y": 200, "type": "link", "path": "/Applications" }
+        {
+          "x": 140,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "win": {
       "icon": "build/icon.png",
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "portable": {

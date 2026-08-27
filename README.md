@@ -90,8 +90,14 @@ around that, build it yourself from source below — the result is identical.
 *Open* (then *Open* again in the dialog), or clear the quarantine flag:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Claudify.app
+xattr -cr /Applications/Claudify.app
 ```
+
+If macOS says **"Claudify is damaged and can't be opened"**, that is the same
+problem wearing a scarier hat — it is not a corrupt download. Apple Silicon
+refuses to run a binary whose signature does not check out, and reports it that
+way. The command above fixes it. Builds from v1.0.1 onward are ad-hoc signed,
+which downgrades this to the ordinary "unidentified developer" prompt.
 
 **Windows** — SmartScreen shows "Windows protected your PC". Click *More info*,
 then *Run anyway*.
@@ -136,10 +142,20 @@ signed in there, just leave it and use Claudify for the additional ones.
 **Each profile is a full Claude instance.** Expect a few hundred MB of RAM each.
 Three or four at once is comfortable; a dozen is not.
 
-**MCP servers are per profile.** Claude reads `claude_desktop_config.json` from
-inside the user-data directory, so every profile has its own. Use *Edit MCP
-config* in the row menu to open a profile's file. If you want the same servers
-everywhere, copy the file between profiles.
+**MCP servers are per profile — but Claudify can copy them for you.** Claude
+reads `claude_desktop_config.json` from inside the user-data directory, so a new
+profile starts with no servers. This is different from logging out and back in
+on a normal install, where the directory never changes and your servers survive.
+
+So the New Profile dialog offers to copy them across, defaulting to your main
+Claude install, and the row menu has *Copy MCP config from…* to do it later or
+from another profile. *Edit MCP config* opens a profile's file directly.
+
+Only `claude_desktop_config.json` is ever copied — never Local Storage, cookies,
+or anything else holding a session, because copying those would put the same
+account in two profiles and undo the isolation. The profile's previous file is
+kept beside it as a timestamped `.bak`, and a source that is not valid JSON is
+refused rather than half-written.
 
 **Deep links pick a winner.** `claude://` links route to whichever instance
 grabs them first, which may not be the profile you expected.

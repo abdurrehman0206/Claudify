@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('claudify', {
 
   reveal: (id) => ipcRenderer.invoke('profile:reveal', id),
   openMcpConfig: (id) => ipcRenderer.invoke('profile:openMcpConfig', id),
+  mcpSources: (excludeProfileId) =>
+    ipcRenderer.invoke('mcp:sources', excludeProfileId),
+  copyMcp: (payload) => ipcRenderer.invoke('mcp:copy', payload),
   usage: (id) => ipcRenderer.invoke('profile:usage', id),
 
   chooseClaude: () => ipcRenderer.invoke('settings:chooseClaude'),
