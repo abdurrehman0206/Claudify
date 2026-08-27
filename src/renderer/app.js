@@ -616,12 +616,31 @@ function openSessionDialog(session) {
   openTarget = session;
   $('open-summary').textContent = session.title || session.id;
 
+  const owns = (id) => session.owners.some((owner) => owner.id === id);
+
   const options = state.profiles.map((profile) => ({
     value: profile.id,
     label: profile.name,
-    meta: launcher_isRunning(profile.id) ? 'running' : 'not running',
+    // A profile that already holds the session has nothing to import, so
+    // offering it would only cost a pointless launch.
+    meta: owns(profile.id)
+      ? 'already has this session'
+      : launcher_isRunning(profile.id)
+        ? 'running'
+        : 'not running',
+    disabled: owns(profile.id),
   }));
-  dropdownFor('open-profile').set(options, options.length ? options[0].value : null);
+
+  const first = options.find((option) => !option.disabled);
+  dropdownFor('open-profile').set(options, first ? first.value : null);
+
+  // Handing the session over means launching Claude again for that profile so
+  // its own instance receives the link. That launcher quits itself once the
+  // running instance takes over, but it is visible for a few seconds first.
+  const target = state.profiles.find((p) => !owns(p.id) && launcher_isRunning(p.id));
+  $('open-note').textContent = target
+    ? 'Claude is already open for that profile, so the session appears in the window you have. A second Claude icon shows for a few seconds while the handover happens, then closes itself.'
+    : 'Claude opens for that profile with the session already loaded.';
 
   $('open-backdrop').classList.remove('hidden');
 }
