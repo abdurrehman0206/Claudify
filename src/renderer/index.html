@@ -43,7 +43,13 @@
           profile can see all of them. Opening one hands it to that profile
           through Claude's own import.
         </p>
-        <div id="sessions-status" class="hint"></div>
+        <div class="filter-row">
+          <div class="segmented" role="group" aria-label="Filter sessions">
+            <button id="filter-all" class="segment" aria-pressed="true">All</button>
+            <button id="filter-orphans" class="segment" aria-pressed="false">Not in any profile</button>
+          </div>
+          <span id="sessions-status" class="hint"></span>
+        </div>
         <ul id="session-list" class="session-list"></ul>
       </section>
 

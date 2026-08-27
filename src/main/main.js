@@ -186,7 +186,7 @@ function registerIPC() {
   // Claude Code transcripts live in ~/.claude/projects, outside the user-data
   // directory, so every profile already sees the same store. Listing is
   // read-only; handing one to a profile goes through Claude's own deep link.
-  handle('sessions:list', () => codeSessions.listSessions());
+  handle('sessions:list', () => codeSessions.listSessions(store.list()));
 
   handle('sessions:open', (_event, { profileId, sessionId }) => {
     const result = launcher.openSession(profileId, sessionId);

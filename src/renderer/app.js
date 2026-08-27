@@ -309,6 +309,8 @@ let activeTab = 'profiles';
 let sessions = [];
 let sessionsLoaded = false;
 let openTarget = null;
+let sessionFilter = 'all';
+let retention = 30;
 
 function switchTab(name) {
   activeTab = name;
@@ -334,8 +336,9 @@ async function loadSessions() {
   }
 
   sessions = result.sessions || [];
+  retention = result.retentionDays || 30;
   $('sessions-status').textContent = sessions.length
-    ? `${sessions.length} session${sessions.length === 1 ? '' : 's'} on this computer`
+    ? `Claude keeps transcripts for ${retention} days`
     : 'No sessions found yet. Use Claude Code once and they will appear here.';
   renderSessions();
 }
@@ -359,6 +362,22 @@ function buildSessionRow(session) {
   name.className = 'name';
   name.textContent = session.title || session.id;
   title.appendChild(name);
+
+  // A session no profile holds is the one worth acting on: it exists on disk
+  // but is in nobody's list, which is exactly what an account switch strands.
+  if (session.owners.length === 0) {
+    const tag = document.createElement('span');
+    tag.className = 'tag accent';
+    tag.textContent = 'not in any profile';
+    title.appendChild(tag);
+  } else {
+    for (const owner of session.owners.slice(0, 3)) {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = owner.label;
+      title.appendChild(tag);
+    }
+  }
   body.appendChild(title);
 
   const meta = document.createElement('div');
@@ -370,6 +389,21 @@ function buildSessionRow(session) {
   bits.push(formatBytes(session.bytes));
   meta.textContent = bits.join(' · ');
   body.appendChild(meta);
+
+  // Claude prunes transcripts on its own schedule; once one goes there is
+  // nothing left to hand to any profile, so warn while it can still be saved.
+  if (session.expiresInDays <= 14) {
+    const warn = document.createElement('div');
+    warn.className = 'card-warning';
+    warn.appendChild(svg(ICON.warning, 13));
+    const text = document.createElement('span');
+    text.textContent =
+      session.expiresInDays === 0
+        ? 'Claude may prune this transcript at any time.'
+        : `Claude prunes this transcript in about ${session.expiresInDays} day${session.expiresInDays === 1 ? '' : 's'}.`;
+    warn.appendChild(text);
+    body.appendChild(warn);
+  }
 
   li.appendChild(body);
 
@@ -386,10 +420,33 @@ function buildSessionRow(session) {
   return li;
 }
 
+function visibleSessions() {
+  return sessionFilter === 'orphans'
+    ? sessions.filter((session) => session.owners.length === 0)
+    : sessions;
+}
+
 function renderSessions() {
   const list = $('session-list');
   list.textContent = '';
-  for (const session of sessions) list.appendChild(buildSessionRow(session));
+
+  const shown = visibleSessions();
+  $('filter-all').setAttribute('aria-pressed', String(sessionFilter === 'all'));
+  $('filter-orphans').setAttribute('aria-pressed', String(sessionFilter === 'orphans'));
+
+  const orphans = sessions.filter((s) => s.owners.length === 0).length;
+  $('filter-all').textContent = `All (${sessions.length})`;
+  $('filter-orphans').textContent = `Not in any profile (${orphans})`;
+
+  if (shown.length === 0 && sessions.length > 0) {
+    const note = document.createElement('li');
+    note.className = 'hint';
+    note.textContent = 'Every session on this computer is already in a profile.';
+    list.appendChild(note);
+    return;
+  }
+
+  for (const session of shown) list.appendChild(buildSessionRow(session));
 }
 
 function openSessionDialog(session) {
@@ -861,6 +918,9 @@ function wire() {
     renderSettings();
   });
   $('reveal-root').addEventListener('click', () => api.revealRoot());
+
+  $('filter-all').addEventListener('click', () => { sessionFilter = 'all'; renderSessions(); });
+  $('filter-orphans').addEventListener('click', () => { sessionFilter = 'orphans'; renderSessions(); });
 
   $('tab-profiles').addEventListener('click', () => switchTab('profiles'));
   $('tab-sessions').addEventListener('click', () => switchTab('sessions'));

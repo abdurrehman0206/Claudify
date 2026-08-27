@@ -4,6 +4,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const paths = require('./paths');
+
 // Claude Code keeps its transcripts in ~/.claude/projects, which lives in the
 // OS home directory rather than the Electron user-data directory. That single
 // fact is what makes this work: the store is *already* shared by every Claudify
@@ -17,12 +19,34 @@ const path = require('path');
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEAD_BYTES = 64 * 1024;
 
-function projectsRoot() {
+function configRoot() {
   const configDir = process.env.CLAUDE_CONFIG_DIR;
-  const base = configDir && configDir.trim()
+  return configDir && configDir.trim()
     ? configDir
     : path.join(os.homedir(), '.claude');
-  return path.join(base, 'projects');
+}
+
+function projectsRoot() {
+  return path.join(configRoot(), 'projects');
+}
+
+const DEFAULT_RETENTION_DAYS = 30;
+
+/**
+ * Claude Code deletes transcripts older than `cleanupPeriodDays` (30 by
+ * default). That, not profile switching, is what actually loses history for
+ * good: once a transcript is pruned there is nothing left to hand to any
+ * profile. Surfacing the remaining window is the only useful warning we can
+ * give, since the deletion happens outside Claudify entirely.
+ */
+function retentionDays() {
+  try {
+    const raw = fs.readFileSync(path.join(configRoot(), 'settings.json'), 'utf8');
+    const value = Number(JSON.parse(raw).cleanupPeriodDays);
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_RETENTION_DAYS;
+  } catch {
+    return DEFAULT_RETENTION_DAYS;
+  }
 }
 
 function isSessionId(value) {
@@ -105,8 +129,77 @@ function describeTranscript(file) {
   return result;
 }
 
+const CLI_SESSION_ID = /"cliSessionId"\s*:\s*"([0-9a-f-]{36})"/;
+
+/**
+ * Which profiles already hold each transcript, found by reading the
+ * `cliSessionId` out of every profile's own session records. A session that no
+ * profile holds is the interesting case: it exists on disk but is not in
+ * anyone's list, which is exactly what an account switch strands.
+ *
+ * Only the head of each record is read; the full file is mostly a large
+ * embedded MCP config that we have no use for here.
+ */
+function ownersBySession(profiles) {
+  const owners = new Map();
+
+  const scan = (baseDir, id, label) => {
+    const root = path.join(baseDir, 'claude-code-sessions');
+    let accounts;
+    try {
+      accounts = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const account of accounts) {
+      if (!account.isDirectory()) continue;
+      let workspaces;
+      try {
+        workspaces = fs.readdirSync(path.join(root, account.name), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const workspace of workspaces) {
+        if (!workspace.isDirectory()) continue;
+        const dir = path.join(root, account.name, workspace.name);
+        let files;
+        try {
+          files = fs.readdirSync(dir);
+        } catch {
+          continue;
+        }
+        for (const file of files) {
+          if (!file.endsWith('.json')) continue;
+          const match = CLI_SESSION_ID.exec(readHead(path.join(dir, file)));
+          if (!match) continue;
+          const list = owners.get(match[1]) || [];
+          if (!list.some((entry) => entry.id === id)) list.push({ id, label });
+          owners.set(match[1], list);
+        }
+      }
+    }
+  };
+
+  scan(mainInstallDirectory(), 'main', 'Main Claude install');
+  for (const profile of profiles || []) {
+    scan(paths.dataDirectory(profile.id), profile.id, profile.name);
+  }
+  return owners;
+}
+
+/** The stock Claude Desktop user-data directory. */
+function mainInstallDirectory() {
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'Claude');
+  }
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || os.homedir(), 'Claude');
+  }
+  return path.join(os.homedir(), '.config', 'Claude');
+}
+
 /** Every resumable session on this computer, newest first. */
-function listSessions() {
+function listSessions(profiles) {
   const root = projectsRoot();
   let projectDirs;
   try {
@@ -115,6 +208,8 @@ function listSessions() {
     return { available: false, root, sessions: [] };
   }
 
+  const owners = ownersBySession(profiles);
+  const keepDays = retentionDays();
   const sessions = [];
   for (const dir of projectDirs) {
     if (!dir.isDirectory()) continue;
@@ -142,6 +237,7 @@ function listSessions() {
       if (stat.size === 0) continue;
 
       const detail = describeTranscript(file);
+      const ageDays = (Date.now() - stat.mtimeMs) / 86400000;
       sessions.push({
         id,
         project: dir.name,
@@ -151,12 +247,14 @@ function listSessions() {
         startedAt: detail.startedAt || null,
         lastActivityAt: stat.mtime.toISOString(),
         bytes: stat.size,
+        owners: owners.get(id) || [],
+        expiresInDays: Math.max(0, Math.ceil(keepDays - ageDays)),
       });
     }
   }
 
   sessions.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
-  return { available: true, root, sessions };
+  return { available: true, root, retentionDays: keepDays, sessions };
 }
 
 /** The deep link Claude itself handles: it imports the session and opens it. */
@@ -169,6 +267,8 @@ function resumeURL(sessionId) {
 
 module.exports = {
   projectsRoot,
+  retentionDays,
+  mainInstallDirectory,
   isSessionId,
   listSessions,
   resumeURL,

@@ -170,10 +170,30 @@ instance, so Claude performs the import itself. Claudify only ever reads the
 transcript store; it never writes into Claude's session storage, and the session
 stays available to every other profile afterwards.
 
+Each row shows which profiles already hold that session, so the ones tagged
+**not in any profile** stand out — those are the sessions stranded by an account
+switch, present on disk but in nobody's list. The filter narrows to just those.
+
 Two limits worth knowing. Sessions that are currently running somewhere are
 refused by Claude's own ownership check, so close one before moving it. And this
 covers Code sessions, not Cowork/agent-mode sessions, which live inside the
 profile and do not appear here.
+
+### The 30-day catch
+
+Claude Code deletes transcripts older than `cleanupPeriodDays`, which defaults
+to **30**. That, not profile switching, is what actually loses history for good:
+once a transcript is pruned there is nothing left for any profile to import, and
+no feature here can bring it back.
+
+The Sessions tab shows the current window and warns on rows with under two weeks
+left. To keep more, set it in `~/.claude/settings.json`:
+
+```json
+{ "cleanupPeriodDays": 365 }
+```
+
+It only affects future pruning — anything already deleted is gone.
 
 **Deep links pick a winner.** `claude://` links route to whichever instance
 grabs them first, which may not be the profile you expected.
