@@ -90,9 +90,9 @@ function buildTrayMenu() {
       const running = launcher.isRunning(profile.id);
       items.push({
         label: running ? `${profile.name}  ●` : profile.name,
-        click: () => {
+        click: async () => {
           if (launcher.isRunning(profile.id)) launcher.focus(profile.id);
-          else launcher.launch(profile.id);
+          else await launcher.launch(profile.id);
           pushState();
         },
       });
@@ -202,8 +202,8 @@ function registerIPC() {
     return result;
   });
 
-  handle('sessions:open', (_event, { profileId, sessionId }) => {
-    const result = launcher.openSession(profileId, sessionId);
+  handle('sessions:open', async (_event, { profileId, sessionId }) => {
+    const result = await launcher.openSession(profileId, sessionId);
     pushState();
     return result;
   });
@@ -231,8 +231,8 @@ function registerIPC() {
     return result;
   });
 
-  handle('profile:launch', (_event, id) => {
-    const result = launcher.launch(id);
+  handle('profile:launch', async (_event, id) => {
+    const result = await launcher.launch(id);
     pushState();
     return result;
   });
@@ -330,8 +330,14 @@ app.whenReady().then(async () => {
 
   // One cheap timer keeps running-state, the tray, and the UI in agreement.
   statusTimer = setInterval(pushState, 2500);
-  // Memory costs a process spawn to read, so it runs on a slower clock.
-  usageTimer = setInterval(() => launcher.refreshUsage().then(pushState), 5000);
+  // Memory and re-adoption both cost a process spawn to read, so they share a
+  // slower clock than the plain status push.
+  usageTimer = setInterval(() => {
+    launcher
+      .refreshRunning()
+      .then(() => launcher.refreshUsage())
+      .then(pushState);
+  }, 5000);
   launcher.refreshUsage().then(pushState);
 
   nativeTheme.on('updated', () => {
