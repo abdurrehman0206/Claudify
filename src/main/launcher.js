@@ -11,6 +11,9 @@ const codeSessions = require('./codeSessions');
 
 const USER_DATA_FLAG = '--user-data-dir=';
 const VERIFY_DELAY_MS = 20000;
+const OPEN_TIMEOUT_MS = 8000;
+const PID_POLL_ATTEMPTS = 24;
+const PID_POLL_INTERVAL_MS = 250;
 
 function isAlive(pid) {
   if (!pid) return false;
@@ -91,7 +94,7 @@ class Launcher {
     return Boolean(entry && isAlive(entry.pid));
   }
 
-  launch(id) {
+  async launch(id) {
     const profile = this.store.get(id);
     if (!profile) return { ok: false, error: 'That profile no longer exists.' };
 
@@ -122,38 +125,134 @@ class Launcher {
       }
       guard.validateArguments(args);
 
-      // Spawning the executable directly is what makes this work on both
-      // platforms: the launched process gets the switch verbatim, and because
-      // Electron's single-instance lock lives inside the user-data directory,
-      // a different directory means a genuinely independent instance rather
-      // than a second window of the running one.
-      const child = spawn(this.installation.executable, args, {
-        detached: true,
-        stdio: 'ignore',
-        env: guard.cleanEnvironment(),
-        windowsHide: false,
-      });
+      const started = await this.startInstance(args, dataDir);
+      if (!started.ok) return started;
 
-      child.on('error', () => {
-        this.running.delete(id);
-      });
-      child.unref();
-
-      if (!child.pid) {
-        return { ok: false, error: 'Claude Desktop did not start.' };
-      }
-
-      this.running.set(id, { pid: child.pid, startedAt: Date.now() });
+      this.running.set(id, { pid: started.pid, startedAt: Date.now() });
       this.unverified.delete(id);
       this.store.markLaunched(id);
       // Only Claudify-managed profiles need the isolation check; the main
       // profile is the default directory and is always already populated.
       if (!isMain) this.scheduleVerification(id, dataDir);
 
-      return { ok: true, pid: child.pid };
+      return { ok: true, pid: started.pid };
     } catch (error) {
       return { ok: false, error: error.message };
     }
+  }
+
+  /**
+   * Starts one instance and returns the pid of the process that owns `dataDir`
+   * (null being the default directory, which is the main profile).
+   *
+   * On macOS the launch goes through LaunchServices rather than spawning Claude
+   * as a child of Claudify. macOS decides privacy access - Documents, Desktop,
+   * Downloads, Full Disk Access - against a process's *responsible* process,
+   * which a child inherits from whoever spawned it. Spawning Claude directly
+   * therefore had every instance Claudify launched asking for file access under
+   * Claudify's identity instead of Claude's, and Claudify holds no such grants:
+   * a Claude Code session under ~/Documents failed with "macOS blocked Claude
+   * Code from reading this folder". An app opened through LaunchServices is
+   * responsible for itself, so it gets Claude's own signature and Claude's own
+   * grants, exactly as launching from the Dock does.
+   *
+   * `--args` still delivers --user-data-dir verbatim, so profile isolation is
+   * unchanged. What is lost is the pid - `open` reports its own, not the app's -
+   * so the instance is found afterwards the way adopt() finds one, by the
+   * directory it was pointed at.
+   */
+  async startInstance(args, dataDir) {
+    const bundle = this.macBundlePath();
+    if (bundle) {
+      const failure = await this.runOpen(bundle, args);
+      if (failure) return { ok: false, error: failure };
+
+      // A second launch for a directory that already has an instance hits
+      // Electron's single-instance lock: the process it started forwards its
+      // argv and exits, so the pid found here is the instance that survived.
+      // That also makes a relaunch after a lost pid self-healing rather than a
+      // way to end up with two windows on one profile.
+      const pid = await this.findInstancePid(dataDir);
+      if (!pid) return { ok: false, error: 'Claude Desktop did not start.' };
+      return { ok: true, pid };
+    }
+
+    // Windows, and any macOS install that is not a bundle: spawn the executable
+    // directly so the launched process gets the switch verbatim. Electron's
+    // single-instance lock lives inside the user-data directory, so a different
+    // directory means a genuinely independent instance rather than a second
+    // window of the running one.
+    const child = spawn(this.installation.executable, args, {
+      detached: true,
+      stdio: 'ignore',
+      env: guard.cleanEnvironment(),
+      windowsHide: false,
+    });
+    child.on('error', () => {});
+    child.unref();
+
+    if (!child.pid) return { ok: false, error: 'Claude Desktop did not start.' };
+    return { ok: true, pid: child.pid };
+  }
+
+  /**
+   * The .app for LaunchServices to open, or null when there is none to use -
+   * every non-macOS install, and a macOS one pointed at a loose executable.
+   */
+  macBundlePath() {
+    if (process.platform !== 'darwin' || !this.installation) return null;
+
+    const bundle = this.installation.displayPath || '';
+    if (bundle.endsWith('.app')) return bundle;
+
+    // Settings accepts an executable as well as a bundle. When the executable
+    // is the one inside a bundle, the bundle is still what `open` needs.
+    const marker = `${path.sep}Contents${path.sep}MacOS${path.sep}`;
+    const index = (this.installation.executable || '').indexOf(marker);
+    if (index === -1) return null;
+    const root = this.installation.executable.slice(0, index);
+    return root.endsWith('.app') ? root : null;
+  }
+
+  /**
+   * Runs `open`; resolves to an error message, or null once it launched.
+   *
+   * The environment goes to `open` itself, not to Claude: LaunchServices starts
+   * the app from the login session's environment, so nothing of Claudify's own
+   * Electron runtime can reach it in the first place.
+   */
+  runOpen(bundle, args) {
+    const openArgs = ['-n', '-a', bundle];
+    if (args.length) openArgs.push('--args', ...args);
+
+    return new Promise((resolve) => {
+      execFile(
+        '/usr/bin/open',
+        openArgs,
+        { timeout: OPEN_TIMEOUT_MS, env: guard.cleanEnvironment() },
+        (error, _stdout, stderr) => {
+          if (!error) return resolve(null);
+          const detail = String(stderr || '').trim() || error.message;
+          resolve(`Claude Desktop did not start: ${detail}`);
+        }
+      );
+    });
+  }
+
+  /** Polls for the live top-level Claude process that owns `dataDir`. */
+  async findInstancePid(dataDir) {
+    const wanted = dataDir === null ? null : path.resolve(dataDir);
+
+    for (let attempt = 0; attempt < PID_POLL_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, PID_POLL_INTERVAL_MS));
+      }
+      for (const found of await this.listClaudeMainProcesses()) {
+        const resolved = found.dataDir === null ? null : path.resolve(found.dataDir);
+        if (resolved === wanted && isAlive(found.pid)) return found.pid;
+      }
+    }
+    return null;
   }
 
   // A working --user-data-dir means Claude starts writing into the profile
@@ -199,14 +298,14 @@ class Launcher {
    * `claude://resume?session=<id>` deep link, so Claude does the import through
    * a supported path and Claudify never touches its session storage.
    *
-   * The same spawn covers both cases. If the profile is not running it cold
-   * starts and picks the link out of argv. If it is running, the spawn hits
+   * One launch covers both cases. If the profile is not running it cold starts
+   * and picks the link out of argv. If it is running, the new process hits
    * Electron's single-instance lock for that user-data directory, the running
    * instance receives the argv through its `second-instance` handler, and the
-   * process we just started exits. Either way the session lands in the profile
+   * process just started exits. Either way the session lands in the profile
    * that was asked for, not whichever instance happens to own the protocol.
    */
-  openSession(id, sessionId) {
+  async openSession(id, sessionId) {
     const profile = this.store.get(id);
     if (!profile) return { ok: false, error: 'That profile no longer exists.' };
     if (!this.installation) {
@@ -214,27 +313,25 @@ class Launcher {
     }
 
     try {
+      let dataDirectory = null;
       const args = [];
       if (!paths.isMain(id)) {
-        const dataDirectory = guard.validateDataDirectory(paths.dataDirectory(id));
+        dataDirectory = guard.validateDataDirectory(paths.dataDirectory(id));
         fs.mkdirSync(dataDirectory, { recursive: true });
         args.push(`${USER_DATA_FLAG}${dataDirectory}`);
       }
       args.push(codeSessions.resumeURL(sessionId));
       guard.validateArguments(args);
 
-      const child = spawn(this.installation.executable, args, {
-        detached: true,
-        stdio: 'ignore',
-        env: guard.cleanEnvironment(),
-      });
-      child.on('error', () => {});
-      child.unref();
+      const wasRunning = this.isRunning(id);
+      const started = await this.startInstance(args, dataDirectory);
+      if (!started.ok) return started;
 
-      // Only claim the pid when this spawn actually became the instance; when
-      // it merely forwarded argv to a running one it exits straight away.
-      if (!this.isRunning(id) && child.pid) {
-        this.running.set(id, { pid: child.pid, startedAt: Date.now() });
+      // Only claim the pid when this launch actually became the instance; when
+      // it merely forwarded argv to a running one, the entry already held is
+      // the one that owns the profile.
+      if (!wasRunning) {
+        this.running.set(id, { pid: started.pid, startedAt: Date.now() });
         this.store.markLaunched(id);
       }
       return { ok: true };
@@ -286,6 +383,19 @@ class Launcher {
       );
     }
     return { ok: true };
+  }
+
+  /**
+   * Keeps the running set honest while Claudify is up, rather than only at
+   * startup. Two things it recovers from: an instance started outside Claudify
+   * (from Terminal, or by Claude relaunching itself, which it does during
+   * startup and after an update - the pid we launched is not always the pid
+   * that survives), and one that has exited. Without this a profile that is
+   * plainly running shows as stopped until Claudify is restarted.
+   */
+  async refreshRunning() {
+    this.reconcile();
+    await this.adopt();
   }
 
   // Re-attaches to Claude instances that are already running under a known
